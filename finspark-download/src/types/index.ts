@@ -574,4 +574,6 @@ export interface Bindings {
   VECTORENGINE_API_KEY: string;
   TUSHARE_TOKEN: string;
   JWT_SECRET: string;
+  /** AKShare Python 代理服务地址 (港股数据) */
+  AKSHARE_PROXY_URL?: string;
 }

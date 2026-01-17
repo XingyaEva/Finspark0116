@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { createVectorEngineService } from '../services/vectorengine';
 import { createTushareService } from '../services/tushare';
+import { createStockDataService } from '../services/stockDataService';
 import { createStockDBService } from '../services/stockdb';
 import { createReportsService } from '../services/reports';
 import { createComicService } from '../services/comic';
@@ -12,6 +13,7 @@ import { createOrchestrator } from '../agents/orchestrator';
 import { AGENT_PROMPTS } from '../agents/prompts';
 import { optionalAuthMiddleware, optionalAuth, requireFeature } from '../middleware/auth';
 import { generateTabInsights, getCachedInsights, cacheInsights, getInsightCacheTTL } from '../services/stockInsightAgent';
+import { isHKStock } from '../utils/stockCode';
 import type { Bindings, StartAnalysisRequest, AnalysisProgress, AnalysisReport, AgentType, ModelPreference, AgentPromptConfig } from '../types';
 
 const api = new Hono<{ Bindings: Bindings }>();
@@ -533,22 +535,27 @@ api.post('/analyze/start', optionalAuthMiddleware(), async (c) => {
       cache: c.env.CACHE,
     });
 
-    // 获取公司名称
+    // 获取公司名称 (支持 A股/港股)
     let companyName = body.companyName;
+    const isHK = isHKStock(body.companyCode);
+    
     if (!companyName) {
-      // 优先从本地数据库获取
-      if (c.env.DB) {
+      // 优先从本地数据库获取 (仅 A股)
+      if (c.env.DB && !isHK) {
         const stockDB = createStockDBService({ db: c.env.DB });
         const localStock = await stockDB.getStockByCode(body.companyCode);
         companyName = localStock?.name;
       }
       
-      // 本地没有则从 Tushare 获取
+      // 本地没有则从数据源获取 (A股用 Tushare，港股用 AKShare)
       if (!companyName) {
         const stockInfo = await tushare.getStockBasic(body.companyCode);
         companyName = stockInfo?.name || body.companyCode;
       }
     }
+    
+    // 记录市场类型
+    console.log(`[API] 分析请求: ${body.companyCode} (${isHK ? '港股' : 'A股'}), 公司名称: ${companyName}`);
 
     // 创建分析记录 - 支持 D1 持久化和 KV 临时存储
     let reportId: number;
@@ -619,12 +626,25 @@ api.post('/analyze/start', optionalAuthMiddleware(), async (c) => {
       }
     }
 
+    // 创建统一数据服务 (支持 A股 + 港股自动路由)
+    const dataService = createStockDataService({
+      tushare: {
+        token: c.env.TUSHARE_TOKEN,
+        cache: c.env.CACHE,
+      },
+      akshareHK: {
+        cache: c.env.CACHE,
+        pythonProxyUrl: c.env.AKSHARE_PROXY_URL || 'http://localhost:8000',
+      }
+    });
+
     // 创建编排器并开始分析 - 带进度回调
     // Phase 0/1: 支持 Agent 独立模型配置 + Preset 系统
     // Phase 2: 支持用户自定义 Prompt 注入
+    // Phase 3: 支持港股数据自动路由
     const orchestrator = createOrchestrator({
       vectorEngine,
-      tushare,
+      dataService,  // 使用统一数据服务 (替代 tushare)
       cache,  // 用于趋势解读缓存
       agentModelConfig: effectiveModelConfig,  // 合并后的 Agent 模型配置
       agentPromptConfig: effectivePromptConfig,  // 【新增】用户自定义 Prompt 配置
@@ -1106,11 +1126,24 @@ api.post('/analyze/force-reanalyze', optionalAuthMiddleware(), async (c) => {
       }
     }
 
+    // 创建统一数据服务 (支持 A股 + 港股自动路由)
+    const dataService = createStockDataService({
+      tushare: {
+        token: c.env.TUSHARE_TOKEN,
+        cache: c.env.CACHE,
+      },
+      akshareHK: {
+        cache: c.env.CACHE,
+        pythonProxyUrl: c.env.AKSHARE_PROXY_URL || 'http://localhost:8000',
+      }
+    });
+
     // 创建编排器
     // Phase 0/1: 支持 Agent 独立模型配置 + Preset 系统
+    // Phase 3: 支持港股数据自动路由
     const orchestrator = createOrchestrator({
       vectorEngine,
-      tushare,
+      dataService,  // 使用统一数据服务 (替代 tushare)
       cache,  // 用于趋势解读缓存
       agentModelConfig: effectiveModelConfig,  // 合并后的 Agent 模型配置
       onProgress: async (progress) => {
