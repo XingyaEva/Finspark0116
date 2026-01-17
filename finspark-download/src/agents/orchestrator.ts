@@ -16,6 +16,8 @@ import {
   MainBizData,
   DailyBasicData
 } from '../services/tushare';
+import { StockDataService } from '../services/stockDataService';
+import { normalizeStockCode } from '../utils/stockCode';
 import { AGENT_PROMPTS, AGENT_NAMES, AGENT_PHASES } from './prompts';
 import type {
   AnalysisReport,
@@ -38,7 +40,10 @@ import type {
 
 export interface OrchestratorConfig {
   vectorEngine: VectorEngineService;
-  tushare: TushareService;
+  /** @deprecated 使用 dataService 替代 */
+  tushare?: TushareService;
+  /** 统一数据服务 (支持 A股 + 港股自动路由) */
+  dataService?: StockDataService;
   cache?: KVNamespace;  // 用于趋势解读缓存
   onProgress?: (progress: AnalysisProgress) => void;
   agentModelConfig?: AgentModelConfig;  // Agent 独立模型配置
@@ -69,7 +74,10 @@ export interface FinancialData {
 
 export class AnalysisOrchestrator {
   private vectorEngine: VectorEngineService;
-  private tushare: TushareService;
+  /** @deprecated 使用 dataService 替代 */
+  private tushare?: TushareService;
+  /** 统一数据服务 (支持 A股 + 港股自动路由) */
+  private dataService?: StockDataService;
   private cache?: KVNamespace;
   private onProgress?: (progress: AnalysisProgress) => void;
   private completedAgents: string[] = [];
@@ -85,6 +93,8 @@ export class AnalysisOrchestrator {
 
   constructor(config: OrchestratorConfig) {
     this.vectorEngine = config.vectorEngine;
+    // 优先使用 dataService (统一数据服务)，向后兼容 tushare
+    this.dataService = config.dataService;
     this.tushare = config.tushare;
     this.cache = config.cache;
     this.onProgress = config.onProgress;
@@ -95,6 +105,27 @@ export class AnalysisOrchestrator {
     };
     // 初始化用户 Prompt 配置（默认为空对象）
     this.agentPromptConfig = config.agentPromptConfig || {};
+    
+    // 日志记录使用的数据服务
+    if (this.dataService) {
+      console.log('[Orchestrator] 使用统一数据服务 (支持 A股 + 港股)');
+    } else if (this.tushare) {
+      console.log('[Orchestrator] 使用 Tushare 数据服务 (仅 A股)');
+    }
+  }
+
+  /**
+   * 获取数据服务 (统一访问入口)
+   * 优先返回 dataService，向后兼容 tushare
+   */
+  private getDataService(): StockDataService | TushareService {
+    if (this.dataService) {
+      return this.dataService;
+    }
+    if (this.tushare) {
+      return this.tushare;
+    }
+    throw new Error('[Orchestrator] 未配置数据服务 (dataService 或 tushare)');
   }
 
   /**
@@ -166,8 +197,12 @@ ${trimmedUserPrompt}
     this.reportProgress('数据获取');
     const financialData = await this.fetchFinancialData(options.companyCode, options.reportPeriod);
     
+    // 识别市场类型 (A股/港股)
+    const { market } = normalizeStockCode(options.companyCode);
+    const isHK = market === 'HK';
+    
     // 提取数据来源信息
-    const dataSourceInfo = this.extractDataSourceInfo(financialData);
+    const dataSourceInfo = this.extractDataSourceInfo(financialData, isHK);
 
     // 2. Planning Agent
     this.reportProgress('分析规划');
@@ -277,8 +312,8 @@ ${trimmedUserPrompt}
         reportPeriods: dataSourceInfo.reportPeriods,
         latestPeriod: dataSourceInfo.latestPeriod,
         announcementDates: dataSourceInfo.annDates,
-        apiUrl: 'https://tushare.pro',
-        disclaimer: '数据来源于Tushare金融数据接口，仅供参考，不构成投资建议',
+        apiUrl: dataSourceInfo.apiUrl,
+        disclaimer: dataSourceInfo.disclaimer,
       },
       planningResult: { ...planningResult, executionTime } as PlanningResult,
       profitabilityResult,
@@ -297,24 +332,33 @@ ${trimmedUserPrompt}
 
   /**
    * 获取财务数据（包含新增的高级接口数据）
+   * 自动路由到 A股(Tushare) 或 港股(AKShare) 数据源
    */
   private async fetchFinancialData(tsCode: string, period?: string): Promise<FinancialData> {
+    // 获取统一数据服务 (支持 A股 + 港股自动路由)
+    const dataService = this.getDataService();
+    
+    // 标准化股票代码并识别市场类型
+    const { code, market } = normalizeStockCode(tsCode);
+    const marketLabel = market === 'HK' ? '港股' : 'A股';
+    console.log(`[Orchestrator] 获取${marketLabel}数据: ${code}`);
+    
     // 并行获取所有财务数据（基础三表 + 高级接口 + 估值数据）
     const [income, balance, cashFlow, forecast, express, finaIndicator, mainBiz, dailyBasic] = await Promise.all([
       // 基础三表
-      this.tushare.getIncomeStatement(tsCode, period),
-      this.tushare.getBalanceSheet(tsCode, period),
-      this.tushare.getCashFlow(tsCode, period),
-      // 高级接口（5000积分）
-      this.tushare.getForecast(tsCode),        // 业绩预告
-      this.tushare.getExpress(tsCode),         // 业绩快报
-      this.tushare.getFinaIndicator(tsCode, period), // 财务指标
-      this.tushare.getMainBiz(tsCode, period), // 主营业务构成
+      dataService.getIncomeStatement(code, period),
+      dataService.getBalanceSheet(code, period),
+      dataService.getCashFlow(code, period),
+      // 高级接口（A股为5000积分接口，港股可能返回空数组）
+      dataService.getForecast(code),        // 业绩预告
+      dataService.getExpress(code),         // 业绩快报
+      dataService.getFinaIndicator(code, period), // 财务指标
+      dataService.getMainBiz(code, period), // 主营业务构成
       // 估值数据（每日指标）
-      this.tushare.getDailyBasic(tsCode),      // PE/PB/PS/市值等估值指标
+      dataService.getDailyBasic(code),      // PE/PB/PS/市值等估值指标
     ]);
 
-    console.log(`[Orchestrator] 数据获取完成: 利润表${income.length}条, 资产负债表${balance.length}条, 现金流${cashFlow.length}条`);
+    console.log(`[Orchestrator] ${marketLabel}数据获取完成: 利润表${income.length}条, 资产负债表${balance.length}条, 现金流${cashFlow.length}条`);
     console.log(`[Orchestrator] 高级数据: 业绩预告${forecast.length}条, 业绩快报${express.length}条, 财务指标${finaIndicator.length}条, 主营业务${mainBiz.length}条`);
     console.log(`[Orchestrator] 估值数据: 每日指标${dailyBasic.length}条`);
 
@@ -332,12 +376,15 @@ ${trimmedUserPrompt}
 
   /**
    * 从财务数据中提取数据来源信息
+   * @param isHK 是否为港股
    */
-  private extractDataSourceInfo(data: FinancialData): {
+  private extractDataSourceInfo(data: FinancialData, isHK: boolean = false): {
     reportPeriods: string[];
     latestPeriod: string;
     dataSource: string;
     annDates: string[];
+    apiUrl: string;
+    disclaimer: string;
   } {
     const periods: Set<string> = new Set();
     const annDates: Set<string> = new Set();
@@ -376,11 +423,25 @@ ${trimmedUserPrompt}
       return `${year}年${month}月`;
     };
     
+    // 根据市场类型返回不同的数据来源信息
+    if (isHK) {
+      return {
+        reportPeriods: sortedPeriods.slice(0, 4).map(formatPeriod),
+        latestPeriod: formatPeriod(latestPeriod),
+        dataSource: 'AKShare港股数据接口 (东方财富)',
+        annDates: sortedAnnDates.slice(0, 4),
+        apiUrl: 'https://akshare.akfamily.xyz/',
+        disclaimer: '数据来源于AKShare港股数据接口（东方财富），仅供参考，不构成投资建议',
+      };
+    }
+    
     return {
       reportPeriods: sortedPeriods.slice(0, 4).map(formatPeriod),
       latestPeriod: formatPeriod(latestPeriod),
       dataSource: 'Tushare金融数据接口',
       annDates: sortedAnnDates.slice(0, 4),
+      apiUrl: 'https://tushare.pro',
+      disclaimer: '数据来源于Tushare金融数据接口，仅供参考，不构成投资建议',
     };
   }
 
@@ -1080,7 +1141,8 @@ ${JSON.stringify(allResults, null, 2)}
    */
   private async getCompanyIndustry(tsCode: string): Promise<string> {
     try {
-      const stockInfo = await this.tushare.getStockBasic(tsCode);
+      const dataService = this.getDataService();
+      const stockInfo = await dataService.getStockBasic(tsCode);
       return stockInfo?.industry || 'default';
     } catch {
       return 'default';
