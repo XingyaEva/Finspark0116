@@ -6,7 +6,7 @@
  * 1. 检查数据库状态
  * 2. 执行数据库迁移（创建所有必需的表）
  * 3. 导入种子数据
- * 4. 可选：执行全量股票同步
+ * 4. 可选：执行全量股票同步（A股+港股）
  * 
  * 使用方法：
  *   node scripts/db-init.mjs [options]
@@ -16,12 +16,15 @@
  *   --reset         重置数据库（危险：会删除所有数据）
  *   --migrate-only  仅执行迁移
  *   --seed-only     仅导入种子数据
- *   --sync          包含全量股票同步（需要网络）
+ *   --sync          包含A股股票同步
+ *   --sync-all      全量A股+港股同步 (6000+)
+ *   --sync-hk       仅同步港股数据 (564只)
+ *   --skip-sync     跳过同步，仅使用种子数据
  *   --prod          操作生产环境
  *   --verbose       详细日志
  * 
- * @version 2.0.0
- * @date 2026-01-12
+ * @version 3.1.0
+ * @date 2026-01-17
  */
 
 import { execSync, spawnSync } from 'child_process';
@@ -93,12 +96,10 @@ function runCommand(command, options = {}) {
 
 function checkD1State(prod = false) {
   if (prod) {
-    // 生产环境：通过 API 检查
     log('检查生产环境 D1 数据库状态...');
-    return { initialized: true }; // 假设生产环境已存在
+    return { initialized: true };
   }
   
-  // 本地环境：检查状态目录
   const statePath = join(PROJECT_ROOT, CONFIG.D1_STATE_DIR);
   const exists = existsSync(statePath);
   
@@ -115,14 +116,12 @@ function getStockCount(prod = false) {
       { cwd: PROJECT_ROOT, encoding: 'utf-8', stdio: 'pipe' }
     );
     
-    // 解析 JSON 输出
     const parsed = JSON.parse(result);
     if (parsed && parsed[0] && parsed[0].results && parsed[0].results[0]) {
       return parsed[0].results[0].count;
     }
     return 0;
   } catch (error) {
-    // 表可能不存在
     return -1;
   }
 }
@@ -156,7 +155,6 @@ function runMigrations(prod = false, verbose = false) {
   const envFlag = prod ? '' : '--local';
   const migrationsDir = join(PROJECT_ROOT, CONFIG.MIGRATIONS_DIR);
   
-  // 方式1: 使用 wrangler d1 migrations apply
   try {
     log('使用 wrangler d1 migrations apply...');
     runCommand(`npx wrangler d1 migrations apply ${CONFIG.DB_NAME} ${envFlag}`, {
@@ -168,7 +166,6 @@ function runMigrations(prod = false, verbose = false) {
     log(`wrangler 迁移失败，尝试手动执行: ${error.message}`, 'warn');
   }
   
-  // 方式2: 使用合并的迁移文件
   const allMigrationsFile = join(PROJECT_ROOT, CONFIG.ALL_MIGRATIONS_FILE);
   if (existsSync(allMigrationsFile)) {
     try {
@@ -183,7 +180,6 @@ function runMigrations(prod = false, verbose = false) {
     }
   }
   
-  // 方式3: 逐个执行迁移文件
   if (existsSync(migrationsDir)) {
     const files = readdirSync(migrationsDir)
       .filter(f => f.endsWith('.sql'))
@@ -199,7 +195,6 @@ function runMigrations(prod = false, verbose = false) {
         });
       } catch (error) {
         log(`迁移 ${file} 失败: ${error.message}`, 'warn');
-        // 继续执行其他迁移
       }
     }
     
@@ -256,55 +251,73 @@ async function syncAllStocks(prod = false, verbose = false, syncType = 'a') {
   // syncType: 'a' = 仅A股, 'hk' = 仅港股, 'all' = A股+港股
   const typeLabels = {
     'a': 'A股 (5400+)',
-    'hk': '港股 (2700+)',
-    'all': 'A股+港股 (8100+)'
+    'hk': '港股通 (564只, AKShare)',
+    'all': 'A股+港股 (6000+)'
   };
   
   log(`执行全量${typeLabels[syncType] || '股票'}同步...`, 'step');
   
-  const syncScript = join(PROJECT_ROOT, 'scripts/sync_all_stocks.mjs');
-  
-  if (!existsSync(syncScript)) {
-    log('同步脚本不存在: scripts/sync_all_stocks.mjs', 'error');
-    return false;
-  }
+  const aStockScript = join(PROJECT_ROOT, 'scripts/sync_all_stocks.mjs');
+  const hkStockScript = join(PROJECT_ROOT, 'scripts/sync_hk_stocks.mjs');
   
   try {
-    // 根据同步类型构建参数
     if (syncType === 'all') {
-      // 全量同步: 先同步港股，再同步A股
-      log('第 1 步: 同步港股数据...');
-      const hkArgs = ['--full', '--hot', '--hk-stock'];
-      if (prod) hkArgs.push('--prod');
-      if (verbose) hkArgs.push('--verbose');
-      
-      runCommand(`node scripts/sync_all_stocks.mjs ${hkArgs.join(' ')}`, {
-        silent: false,
-      });
-      
-      log('第 2 步: 同步A股数据...');
-      const aArgs = ['--hot', '--a-stock'];  // 不使用 --full，保留港股数据
-      if (prod) aArgs.push('--prod');
-      if (verbose) aArgs.push('--verbose');
-      
-      runCommand(`node scripts/sync_all_stocks.mjs ${aArgs.join(' ')}`, {
-        silent: false,
-      });
-    } else {
-      const args = ['--full', '--hot'];
-      if (syncType === 'hk') {
-        args.push('--hk-stock');
-        log('正在从 Tushare 获取港股数据，预计需要 10-30 秒...');
+      // 全量同步: 先同步A股，再同步港股
+      log('第 1 步: 同步A股数据 (Tushare)...');
+      if (existsSync(aStockScript)) {
+        const aArgs = ['--full', '--hot', '--a-stock'];
+        if (prod) aArgs.push('--prod');
+        if (verbose) aArgs.push('--verbose');
+        
+        runCommand(`node scripts/sync_all_stocks.mjs ${aArgs.join(' ')}`, {
+          silent: false,
+        });
       } else {
-        args.push('--a-stock');
-        log('正在从 Tushare 获取 A 股数据，预计需要 30-60 秒...');
+        log('A股同步脚本不存在，跳过', 'warn');
       }
-      if (prod) args.push('--prod');
-      if (verbose) args.push('--verbose');
       
-      runCommand(`node scripts/sync_all_stocks.mjs ${args.join(' ')}`, {
-        silent: false,
-      });
+      log('第 2 步: 同步港股数据 (AKShare 代理)...');
+      if (existsSync(hkStockScript)) {
+        const hkArgs = ['--full', '--hot'];
+        if (prod) hkArgs.push('--prod');
+        if (verbose) hkArgs.push('--verbose');
+        
+        runCommand(`node scripts/sync_hk_stocks.mjs ${hkArgs.join(' ')}`, {
+          silent: false,
+        });
+      } else {
+        log('港股同步脚本不存在，跳过', 'warn');
+      }
+    } else if (syncType === 'hk') {
+      // 仅港股同步（使用 AKShare 代理脚本）
+      if (existsSync(hkStockScript)) {
+        log('正在从 AKShare 代理获取港股通成分股数据...');
+        const hkArgs = ['--full', '--hot'];
+        if (prod) hkArgs.push('--prod');
+        if (verbose) hkArgs.push('--verbose');
+        
+        runCommand(`node scripts/sync_hk_stocks.mjs ${hkArgs.join(' ')}`, {
+          silent: false,
+        });
+      } else {
+        log('港股同步脚本不存在: scripts/sync_hk_stocks.mjs', 'error');
+        return false;
+      }
+    } else {
+      // 仅A股同步
+      if (existsSync(aStockScript)) {
+        const args = ['--full', '--hot', '--a-stock'];
+        log('正在从 Tushare 获取 A 股数据，预计需要 30-60 秒...');
+        if (prod) args.push('--prod');
+        if (verbose) args.push('--verbose');
+        
+        runCommand(`node scripts/sync_all_stocks.mjs ${args.join(' ')}`, {
+          silent: false,
+        });
+      } else {
+        log('A股同步脚本不存在: scripts/sync_all_stocks.mjs', 'error');
+        return false;
+      }
     }
     
     log(`${typeLabels[syncType] || '股票'}同步完成`, 'success');
@@ -330,7 +343,6 @@ function resetDatabase(prod = false, verbose = false) {
   const envFlag = '--local';
   
   try {
-    // 获取所有表
     const tables = getTableList(false);
     
     if (tables.length === 0) {
@@ -340,7 +352,6 @@ function resetDatabase(prod = false, verbose = false) {
     
     log(`将删除 ${tables.length} 个表: ${tables.join(', ')}`);
     
-    // 删除所有表
     for (const table of tables) {
       try {
         runCommand(`npx wrangler d1 execute ${CONFIG.DB_NAME} ${envFlag} --command="DROP TABLE IF EXISTS ${table};"`, {
@@ -380,7 +391,6 @@ function printStatus(prod = false) {
     console.log('');
     console.log('   数据表列表:');
     
-    // 分组显示
     const groups = {
       '核心表': ['stocks', 'stocks_fts', 'users', 'user_sessions'],
       '分析报告': ['analysis_reports', 'comic_reports', 'share_links', 'share_access_logs'],
@@ -406,7 +416,6 @@ function printStatus(prod = false) {
       }
     }
     
-    // 其他表
     const knownTables = Object.values(groups).flat();
     const otherTables = tables.filter(t => !knownTables.includes(t) && !t.startsWith('_'));
     if (otherTables.length > 0) {
@@ -422,41 +431,13 @@ function printStatus(prod = false) {
 // ============================================
 
 const REQUIRED_TABLES = [
-  // 核心表
-  'stocks',
-  'users',
-  'user_sessions',
-  
-  // 分析报告
-  'analysis_reports',
-  'comic_reports',
-  
-  // 财务数据
-  'income_statements',
-  'balance_sheets',
-  'cash_flows',
-  'fina_indicators',
-  'daily_quotes',
-  'data_sync_logs',
-  
-  // 用户功能
-  'user_favorites',
-  'favorite_groups',
-  'saved_questions',
-  'user_preferences',
-  
-  // 会员系统
-  'membership_plans',
-  'membership_orders',
-  'feature_limits',
-  
-  // 模型评估
-  'model_configs',
-  'model_evaluations',
-  
-  // Agent系统
-  'user_agent_presets',
-  'user_agent_settings',
+  'stocks', 'users', 'user_sessions',
+  'analysis_reports', 'comic_reports',
+  'income_statements', 'balance_sheets', 'cash_flows', 'fina_indicators', 'daily_quotes', 'data_sync_logs',
+  'user_favorites', 'favorite_groups', 'saved_questions', 'user_preferences',
+  'membership_plans', 'membership_orders', 'feature_limits',
+  'model_configs', 'model_evaluations',
+  'user_agent_presets', 'user_agent_settings',
 ];
 
 function checkRequiredTables(prod = false) {
@@ -485,9 +466,9 @@ async function main() {
   const migrateOnly = args.includes('--migrate-only');
   const seedOnly = args.includes('--seed-only');
   const sync = args.includes('--sync');
-  const syncAll = args.includes('--sync-all');  // 全量A股+港股同步 (8100+)
-  const syncHK = args.includes('--sync-hk');   // 仅港股同步
-  const skipSync = args.includes('--skip-sync'); // 跳过同步，仅使用种子数据
+  const syncAll = args.includes('--sync-all');
+  const syncHK = args.includes('--sync-hk');
+  const skipSync = args.includes('--skip-sync');
   const prod = args.includes('--prod');
   const verbose = args.includes('--verbose');
   const help = args.includes('--help') || args.includes('-h');
@@ -502,16 +483,16 @@ async function main() {
   --reset         重置数据库（危险：会删除所有数据）
   --migrate-only  仅执行数据库迁移
   --seed-only     仅导入种子数据
-  --sync          包含增量股票同步
-  --sync-all      全量A股+港股同步（从 Tushare 获取 8100+ 股票）★推荐
-  --sync-hk       仅同步港股数据（2700+ 只）
+  --sync          包含A股股票同步
+  --sync-all      全量A股+港股同步（6000+ 股票）★推荐
+  --sync-hk       仅同步港股数据（564只港股通成分股）
   --skip-sync     跳过同步，仅使用种子数据（169只）
   --prod          操作生产环境（默认本地）
   --verbose       显示详细日志
   --help, -h      显示此帮助信息
 
 示例:
-  # 首次初始化 + 全量A股+港股同步（推荐，约8100+股票）
+  # 首次初始化 + 全量A股+港股同步（推荐，约6000+股票）
   node scripts/db-init.mjs --full --sync-all
 
   # 仅同步港股数据
@@ -532,14 +513,12 @@ async function main() {
   log(`配置: 环境=${prod ? '生产' : '本地'}, 完整=${fullInit}, 重置=${reset}, 全量同步=${syncAll}, 港股同步=${syncHK}, 跳过同步=${skipSync}`);
   console.log('');
   
-  // 检查当前状态
   const d1State = checkD1State(prod);
   const stockCount = getStockCount(prod);
   
   log(`当前状态: D1=${d1State.initialized ? '已初始化' : '未初始化'}, 股票=${stockCount >= 0 ? stockCount : '未知'}`);
   console.log('');
   
-  // 重置数据库
   if (reset) {
     if (!resetDatabase(prod, verbose)) {
       log('数据库重置失败', 'error');
@@ -548,7 +527,6 @@ async function main() {
     console.log('');
   }
   
-  // 执行迁移
   if (fullInit || migrateOnly || stockCount < 0) {
     if (!runMigrations(prod, verbose)) {
       log('迁移失败', 'error');
@@ -557,34 +535,25 @@ async function main() {
     console.log('');
   }
   
-  // 导入种子数据
   if (fullInit || seedOnly || stockCount === 0) {
     importSeedData(prod, verbose);
     console.log('');
   }
   
-  // 全量同步
   if (syncAll) {
-    // 全量A股+港股同步 (8100+)
-    await syncAllStocks(prod, verbose, 'all');  // 'all' = A股+港股
+    await syncAllStocks(prod, verbose, 'all');
     console.log('');
   } else if (syncHK) {
-    // 仅港股同步
     await syncAllStocks(prod, verbose, 'hk');
     console.log('');
   } else if (sync) {
-    // 增量同步（仅A股）
     await syncAllStocks(prod, verbose, 'a');
     console.log('');
   }
   
-  // 检查必需表
   checkRequiredTables(prod);
-  
-  // 打印最终状态
   printStatus(prod);
   
-  // 成功提示
   const finalCount = getStockCount(prod);
   
   console.log(colors.bold('✅ 数据库初始化完成'));
@@ -599,7 +568,6 @@ async function main() {
   }
 }
 
-// 运行
 main().catch((error) => {
   log(`初始化失败: ${error.message}`, 'error');
   console.error(error);
