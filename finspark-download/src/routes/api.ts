@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { createVectorEngineService } from '../services/vectorengine';
 import { createTushareService } from '../services/tushare';
+import { createAkshareHKService } from '../services/akshareHK';
 import { createStockDataService } from '../services/stockDataService';
 import { createStockDBService } from '../services/stockdb';
 import { createReportsService } from '../services/reports';
@@ -270,13 +271,27 @@ api.get('/stock/:code/market-data', async (c) => {
   }
 
   try {
-    const tushare = createTushareService({
-      token: c.env.TUSHARE_TOKEN,
-      cache: c.env.CACHE,
-    });
-
-    // 使用 getMarketDataPackage 一次性获取所有数据
-    const marketData = await tushare.getMarketDataPackage(code, days);
+    // 判断是否为港股，使用不同的数据服务
+    const isHK = isHKStock(code);
+    
+    let marketData;
+    
+    if (isHK) {
+      // 港股使用 AKShare HK 服务
+      const akshareHK = createAkshareHKService({
+        cache: c.env.CACHE,
+        pythonProxyUrl: c.env.AKSHARE_PROXY_URL || 'http://localhost:8000',
+      });
+      marketData = await akshareHK.getMarketDataPackage(code, days);
+      console.log(`[Market Data] 港股数据: ${code}, K线数量: ${marketData.kline?.length || 0}`);
+    } else {
+      // A股使用 Tushare 服务
+      const tushare = createTushareService({
+        token: c.env.TUSHARE_TOKEN,
+        cache: c.env.CACHE,
+      });
+      marketData = await tushare.getMarketDataPackage(code, days);
+    }
 
     // 如果没有基本信息，说明股票不存在
     if (!marketData.basic) {
@@ -347,13 +362,26 @@ api.get('/stock/:code/tab-insights', async (c) => {
       }
     }
 
-    // 2. 获取行情数据
-    const tushare = createTushareService({
-      token: c.env.TUSHARE_TOKEN,
-      cache: c.env.CACHE,
-    });
-
-    const marketData = await tushare.getMarketDataPackage(code, 30);
+    // 2. 判断是否为港股，获取行情数据
+    const isHK = isHKStock(code);
+    let marketData;
+    
+    if (isHK) {
+      // 港股使用 AKShare HK 服务
+      const akshareHK = createAkshareHKService({
+        cache: c.env.CACHE,
+        pythonProxyUrl: c.env.AKSHARE_PROXY_URL || 'http://localhost:8000',
+      });
+      marketData = await akshareHK.getMarketDataPackage(code, 30);
+      console.log(`[StockInsightAgent] 港股数据: ${code}, K线数量: ${marketData.kline?.length || 0}`);
+    } else {
+      // A股使用 Tushare 服务
+      const tushare = createTushareService({
+        token: c.env.TUSHARE_TOKEN,
+        cache: c.env.CACHE,
+      });
+      marketData = await tushare.getMarketDataPackage(code, 30);
+    }
     
     if (!marketData.basic) {
       return c.json({ success: false, error: '股票不存在或数据获取失败' }, 404);
@@ -1984,24 +2012,56 @@ api.get('/chart/financial/:code', async (c) => {
   }
   
   try {
-    // 创建 Tushare 服务
-    const tushare = createTushareService({
-      token: c.env.TUSHARE_TOKEN || '',
-      cache: c.env.CACHE,
-      useProxy: true, // 使用5000积分中转站
-    });
+    // 判断是否为港股
+    const isHK = isHKStock(companyCode);
     
-    // 并行获取多种财务数据
-    const [income, balanceSheet, cashFlow, finaIndicator, dailyBasic] = await Promise.all([
-      tushare.getIncomeStatement(companyCode).catch(() => []),
-      tushare.getBalanceSheet(companyCode).catch(() => []),
-      tushare.getCashFlow(companyCode).catch(() => []),
-      tushare.getFinaIndicator(companyCode).catch(() => []),
-      tushare.getDailyBasic(companyCode).catch(() => []),
-    ]);
+    let income: any[] = [];
+    let balanceSheet: any[] = [];
+    let cashFlow: any[] = [];
+    let finaIndicator: any[] = [];
+    let dailyBasic: any[] = [];
+    let stockInfo: any = null;
     
-    // 获取股票基本信息
-    const stockInfo = await tushare.getStockBasic(companyCode).catch(() => null);
+    if (isHK) {
+      // 港股使用 AKShare HK 服务
+      const akshareHK = createAkshareHKService({
+        cache: c.env.CACHE,
+        pythonProxyUrl: c.env.AKSHARE_PROXY_URL || 'http://localhost:8000',
+      });
+      
+      console.log(`[Chart Financial] 港股数据请求: ${companyCode}`);
+      
+      // 并行获取港股财务数据
+      [income, balanceSheet, cashFlow, finaIndicator, dailyBasic, stockInfo] = await Promise.all([
+        akshareHK.getIncomeStatement(companyCode).catch((e) => { console.error('HK income error:', e); return []; }),
+        akshareHK.getBalanceSheet(companyCode).catch((e) => { console.error('HK balance error:', e); return []; }),
+        akshareHK.getCashFlow(companyCode).catch((e) => { console.error('HK cashflow error:', e); return []; }),
+        akshareHK.getFinaIndicator(companyCode).catch(() => []),
+        akshareHK.getDailyBasic(companyCode).catch(() => []),
+        akshareHK.getStockBasic(companyCode).catch(() => null),
+      ]);
+      
+      console.log(`[Chart Financial] 港股数据获取完成: income=${income.length}, balance=${balanceSheet.length}, cashflow=${cashFlow.length}`);
+    } else {
+      // A股使用 Tushare 服务
+      const tushare = createTushareService({
+        token: c.env.TUSHARE_TOKEN || '',
+        cache: c.env.CACHE,
+        useProxy: true,
+      });
+      
+      // 并行获取多种财务数据
+      [income, balanceSheet, cashFlow, finaIndicator, dailyBasic] = await Promise.all([
+        tushare.getIncomeStatement(companyCode).catch(() => []),
+        tushare.getBalanceSheet(companyCode).catch(() => []),
+        tushare.getCashFlow(companyCode).catch(() => []),
+        tushare.getFinaIndicator(companyCode).catch(() => []),
+        tushare.getDailyBasic(companyCode).catch(() => []),
+      ]);
+      
+      // 获取股票基本信息
+      stockInfo = await tushare.getStockBasic(companyCode).catch(() => null);
+    }
     
     return c.json({
       success: true,
