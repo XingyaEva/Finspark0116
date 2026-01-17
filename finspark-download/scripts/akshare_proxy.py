@@ -584,6 +584,124 @@ async def get_hk_main_biz(stock_code: str):
         }
 
 
+# ============ 港股列表（港股通成分股）============
+@app.get("/hk/stock_list")
+async def get_hk_stock_list():
+    """
+    获取港股通成分股列表（可通过港股通交易的港股）
+    
+    Returns:
+        JSON 格式的港股列表
+    """
+    try:
+        print(f"[AkshareProxy] 获取港股通成分股列表...")
+        
+        # 获取港股通成分股
+        df = ak.stock_hk_ggt_components_em()
+        
+        if df is None or df.empty:
+            return {
+                "success": True,
+                "data": [],
+                "count": 0,
+                "message": "No HK stock data found"
+            }
+        
+        # 转换为标准格式
+        stocks = []
+        for _, row in df.iterrows():
+            code = str(row.get('代码', '')).strip()
+            name = str(row.get('名称', '')).strip()
+            
+            if code and name:
+                stocks.append({
+                    "ts_code": f"{code}.HK",
+                    "symbol": code,
+                    "name": name,
+                    "market": "HK",
+                    "stock_type": "HK"
+                })
+        
+        print(f"[AkshareProxy] 成功获取 {len(stocks)} 只港股通成分股")
+        
+        return {
+            "success": True,
+            "data": stocks,
+            "count": len(stocks)
+        }
+        
+    except Exception as e:
+        error_msg = str(e)
+        traceback.print_exc()
+        print(f"[AkshareProxy] 错误: {error_msg}", file=sys.stderr)
+        
+        return {
+            "success": False,
+            "error": error_msg,
+            "data": [],
+            "count": 0
+        }
+
+
+# ============ 所有港股列表（实时行情）============
+@app.get("/hk/all_stocks")
+async def get_all_hk_stocks():
+    """
+    获取所有港股列表（从实时行情获取）
+    
+    Returns:
+        JSON 格式的所有港股列表
+    """
+    try:
+        print(f"[AkshareProxy] 获取所有港股列表...")
+        
+        # 获取港股实时行情
+        df = ak.stock_hk_spot_em()
+        
+        if df is None or df.empty:
+            return {
+                "success": True,
+                "data": [],
+                "count": 0,
+                "message": "No HK stock data found"
+            }
+        
+        # 转换为标准格式
+        stocks = []
+        for _, row in df.iterrows():
+            code = str(row.get('代码', '')).strip()
+            name = str(row.get('名称', '')).strip()
+            
+            if code and name:
+                stocks.append({
+                    "ts_code": f"{code}.HK",
+                    "symbol": code,
+                    "name": name,
+                    "market": "HK",
+                    "stock_type": "HK"
+                })
+        
+        print(f"[AkshareProxy] 成功获取 {len(stocks)} 只港股")
+        
+        return {
+            "success": True,
+            "data": stocks,
+            "count": len(stocks)
+        }
+        
+    except Exception as e:
+        error_msg = str(e)
+        traceback.print_exc()
+        print(f"[AkshareProxy] 错误: {error_msg}", file=sys.stderr)
+        
+        return {
+            "success": False,
+            "error": error_msg,
+            "data": [],
+            "count": 0
+        }
+
+
 # ============ 主程序入口 ============
 if __name__ == "__main__":
     import uvicorn
