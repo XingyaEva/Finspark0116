@@ -800,59 +800,61 @@ export const stockMarketPanelStyles = `
     font-size: 16px;
   }
   
-  .tab-insight-toggle {
+  /* 上下堆叠布局 - 专业版和白话版同时显示 */
+  .tab-insight-content-stacked {
     display: flex !important;
-    gap: 4px;
-    background: rgba(0, 0, 0, 0.3);
-    border-radius: 6px;
-    padding: 3px;
+    flex-direction: column !important;
+    gap: 16px;
   }
   
-  .insight-mode-btn {
-    padding: 6px 14px;
-    font-size: 12px;
-    border: none;
-    background: transparent;
-    color: #9ca3af;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: all 0.2s ease;
+  .insight-block {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    padding: 14px 16px;
+    border-left: 3px solid #d4af37;
+  }
+  
+  .insight-block.professional {
+    border-left-color: #d4af37;
+  }
+  
+  .insight-block.simple {
+    border-left-color: #3b82f6;
+    background: rgba(59, 130, 246, 0.05);
+  }
+  
+  .insight-block-label {
     display: flex !important;
     align-items: center !important;
-    gap: 5px;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #9ca3af;
+    margin-bottom: 8px;
   }
   
-  .insight-mode-btn:hover {
+  .insight-block.professional .insight-block-label {
     color: #d4af37;
   }
   
-  .insight-mode-btn.active {
-    background: rgba(212, 175, 55, 0.2);
-    color: #d4af37;
+  .insight-block.simple .insight-block-label {
+    color: #3b82f6;
   }
   
-  .tab-insight-content {
-    min-height: 60px;
-  }
-  
-  .insight-text {
-    display: none;
+  .insight-text-area {
     font-size: 14px;
     line-height: 1.8;
     color: #e5e7eb;
   }
   
-  .insight-text.active {
-    display: block;
-  }
-  
-  .insight-text.professional {
+  .insight-block.professional .insight-text-area {
     font-family: 'Noto Serif SC', 'Noto Sans SC', serif;
     letter-spacing: 0.02em;
   }
   
-  .insight-text.simple {
+  .insight-block.simple .insight-text-area {
     font-family: 'Noto Sans SC', sans-serif;
+    color: #d1d5db;
   }
   
   .tab-insight-keypoints {
@@ -1094,31 +1096,33 @@ export const stockMarketPanelHtml = `
       <div class="tab-insight-section" id="tradingInsightSection">
         <div class="tab-insight-header">
           <div class="tab-insight-title">
-            <i class="fas fa-robot"></i>
-            <span>AI 智能解读</span>
-          </div>
-          <div class="tab-insight-toggle">
-            <button class="insight-mode-btn active" data-mode="professional" onclick="window.StockMarketPanel.toggleInsightMode('trading', 'professional')">
-              <i class="fas fa-user-tie"></i>
-              专业版
-            </button>
-            <button class="insight-mode-btn" data-mode="simple" onclick="window.StockMarketPanel.toggleInsightMode('trading', 'simple')">
-              <i class="fas fa-user"></i>
-              白话版
-            </button>
+            <i class="fas fa-user-tie"></i>
+            <span>AI 专业分析师解读</span>
           </div>
         </div>
-        <div class="tab-insight-content">
-          <div id="tradingInsightPro" class="insight-text-block active">
-            <div class="insight-loading">
-              <i class="fas fa-spinner fa-spin"></i>
-              <span>正在生成专业解读...</span>
+        <div class="tab-insight-content-stacked">
+          <div class="insight-block professional">
+            <div class="insight-block-label">
+              <i class="fas fa-chart-line"></i>
+              <span>专业版</span>
+            </div>
+            <div id="tradingInsightPro" class="insight-text-area">
+              <div class="insight-loading">
+                <i class="fas fa-spinner fa-spin"></i>
+                <span>正在生成专业解读...</span>
+              </div>
             </div>
           </div>
-          <div id="tradingInsightSimple" class="insight-text-block">
-            <div class="insight-loading">
-              <i class="fas fa-spinner fa-spin"></i>
-              <span>正在生成通俗解读...</span>
+          <div class="insight-block simple">
+            <div class="insight-block-label">
+              <i class="fas fa-comment-dots"></i>
+              <span>白话版</span>
+            </div>
+            <div id="tradingInsightSimple" class="insight-text-area">
+              <div class="insight-loading">
+                <i class="fas fa-spinner fa-spin"></i>
+                <span>正在生成通俗解读...</span>
+              </div>
             </div>
           </div>
         </div>
@@ -1187,31 +1191,33 @@ export const stockMarketPanelHtml = `
       <div class="tab-insight-section" id="valuationInsightSection">
         <div class="tab-insight-header">
           <div class="tab-insight-title">
-            <i class="fas fa-robot"></i>
-            <span>AI 智能解读</span>
-          </div>
-          <div class="tab-insight-toggle">
-            <button class="insight-mode-btn active" data-mode="professional" onclick="window.StockMarketPanel.toggleInsightMode('valuation', 'professional')">
-              <i class="fas fa-user-tie"></i>
-              专业版
-            </button>
-            <button class="insight-mode-btn" data-mode="simple" onclick="window.StockMarketPanel.toggleInsightMode('valuation', 'simple')">
-              <i class="fas fa-user"></i>
-              白话版
-            </button>
+            <i class="fas fa-user-tie"></i>
+            <span>AI 专业分析师解读</span>
           </div>
         </div>
-        <div class="tab-insight-content">
-          <div id="valuationInsightPro" class="insight-text-block active">
-            <div class="insight-loading">
-              <i class="fas fa-spinner fa-spin"></i>
-              <span>正在生成专业解读...</span>
+        <div class="tab-insight-content-stacked">
+          <div class="insight-block professional">
+            <div class="insight-block-label">
+              <i class="fas fa-chart-line"></i>
+              <span>专业版</span>
+            </div>
+            <div id="valuationInsightPro" class="insight-text-area">
+              <div class="insight-loading">
+                <i class="fas fa-spinner fa-spin"></i>
+                <span>正在生成专业解读...</span>
+              </div>
             </div>
           </div>
-          <div id="valuationInsightSimple" class="insight-text-block">
-            <div class="insight-loading">
-              <i class="fas fa-spinner fa-spin"></i>
-              <span>正在生成通俗解读...</span>
+          <div class="insight-block simple">
+            <div class="insight-block-label">
+              <i class="fas fa-comment-dots"></i>
+              <span>白话版</span>
+            </div>
+            <div id="valuationInsightSimple" class="insight-text-area">
+              <div class="insight-loading">
+                <i class="fas fa-spinner fa-spin"></i>
+                <span>正在生成通俗解读...</span>
+              </div>
             </div>
           </div>
         </div>
@@ -1290,31 +1296,33 @@ export const stockMarketPanelHtml = `
       <div class="tab-insight-section" id="sharesInsightSection">
         <div class="tab-insight-header">
           <div class="tab-insight-title">
-            <i class="fas fa-robot"></i>
-            <span>AI 智能解读</span>
-          </div>
-          <div class="tab-insight-toggle">
-            <button class="insight-mode-btn active" data-mode="professional" onclick="window.StockMarketPanel.toggleInsightMode('shares', 'professional')">
-              <i class="fas fa-user-tie"></i>
-              专业版
-            </button>
-            <button class="insight-mode-btn" data-mode="simple" onclick="window.StockMarketPanel.toggleInsightMode('shares', 'simple')">
-              <i class="fas fa-user"></i>
-              白话版
-            </button>
+            <i class="fas fa-user-tie"></i>
+            <span>AI 专业分析师解读</span>
           </div>
         </div>
-        <div class="tab-insight-content">
-          <div id="sharesInsightPro" class="insight-text-block active">
-            <div class="insight-loading">
-              <i class="fas fa-spinner fa-spin"></i>
-              <span>正在生成专业解读...</span>
+        <div class="tab-insight-content-stacked">
+          <div class="insight-block professional">
+            <div class="insight-block-label">
+              <i class="fas fa-chart-line"></i>
+              <span>专业版</span>
+            </div>
+            <div id="sharesInsightPro" class="insight-text-area">
+              <div class="insight-loading">
+                <i class="fas fa-spinner fa-spin"></i>
+                <span>正在生成专业解读...</span>
+              </div>
             </div>
           </div>
-          <div id="sharesInsightSimple" class="insight-text-block">
-            <div class="insight-loading">
-              <i class="fas fa-spinner fa-spin"></i>
-              <span>正在生成通俗解读...</span>
+          <div class="insight-block simple">
+            <div class="insight-block-label">
+              <i class="fas fa-comment-dots"></i>
+              <span>白话版</span>
+            </div>
+            <div id="sharesInsightSimple" class="insight-text-area">
+              <div class="insight-loading">
+                <i class="fas fa-spinner fa-spin"></i>
+                <span>正在生成通俗解读...</span>
+              </div>
             </div>
           </div>
         </div>
@@ -1399,13 +1407,33 @@ export const stockMarketPanelScript = `
       console.log('[StockMarketPanel] 初始化完成');
     },
     
+    // 当前加载的股票代码（用于防止重复加载）
+    currentStockCode: null,
+    isLoading: false,
+    
     // 加载股票数据
     loadData: async function(stockCode, days = 180) {
+      // 防止重复加载同一股票
+      if (this.currentStockCode === stockCode && this.currentData && !this.isLoading) {
+        console.log('[StockMarketPanel] 股票已加载，跳过重复请求:', stockCode);
+        return;
+      }
+      
+      // 如果正在加载中，跳过
+      if (this.isLoading) {
+        console.log('[StockMarketPanel] 正在加载中，跳过请求:', stockCode);
+        return;
+      }
+      
       const panel = document.getElementById('stockMarketPanel');
       if (!panel) {
         console.error('[StockMarketPanel] 面板元素未找到');
         return;
       }
+      
+      // 标记开始加载
+      this.isLoading = true;
+      this.currentStockCode = stockCode;
       
       // 强制显示面板（使用多种方式确保显示）
       panel.style.display = 'block';
@@ -1413,8 +1441,10 @@ export const stockMarketPanelScript = `
       panel.style.opacity = '1';
       panel.classList.remove('hidden');
       
-      // 显示加载状态
-      this.showLoading();
+      // 只有在没有数据时才显示加载状态（避免覆盖已渲染的图表）
+      if (!this.currentData) {
+        this.showLoading();
+      }
       
       try {
         const response = await fetch('/api/stock/' + stockCode + '/market-data?days=' + days + '&withInsight=true');
@@ -1422,6 +1452,7 @@ export const stockMarketPanelScript = `
         
         if (!result.success) {
           this.showError(result.error || '数据加载失败');
+          this.isLoading = false;
           return;
         }
         
@@ -1440,11 +1471,15 @@ export const stockMarketPanelScript = `
         
         console.log('[StockMarketPanel] 数据加载完成:', stockCode);
         
+        // 标记加载完成
+        this.isLoading = false;
+        
         // 异步加载 Tab 解读（不阻塞主流程）
         this.loadTabInsights(stockCode);
       } catch (error) {
         console.error('[StockMarketPanel] 数据加载失败:', error);
         this.showError('网络错误，请稍后重试');
+        this.isLoading = false;
       }
     },
     
@@ -1543,6 +1578,13 @@ export const stockMarketPanelScript = `
       
       console.log('[StockMarketPanel] klineChart element found, size:', chartDom.offsetWidth, 'x', chartDom.offsetHeight);
       
+      // 如果元素尺寸为0，延迟重试（等待DOM渲染完成）
+      if (chartDom.offsetWidth === 0 || chartDom.offsetHeight === 0) {
+        console.log('[StockMarketPanel] Chart container not visible, retrying in 200ms...');
+        setTimeout(() => this.renderKlineChart(), 200);
+        return;
+      }
+      
       // 检查ECharts是否加载
       if (typeof echarts === 'undefined') {
         console.error('[StockMarketPanel] ECharts未加载，等待重试...');
@@ -1561,20 +1603,47 @@ export const stockMarketPanelScript = `
         return;
       }
       
+      // 清除加载状态的HTML内容（重要：ECharts需要空的容器）
+      chartDom.innerHTML = '';
+      
       // 初始化或获取实例
       if (!this.chartInstance) {
+        console.log('[StockMarketPanel] 初始化ECharts实例');
         this.chartInstance = echarts.init(chartDom);
+      } else {
+        // 如果已有实例，检查是否需要重新初始化
+        try {
+          this.chartInstance.getOption();
+        } catch (e) {
+          console.log('[StockMarketPanel] 重新初始化ECharts实例');
+          this.chartInstance = echarts.init(chartDom);
+        }
       }
       
       this.updateKlineChart();
+      console.log('[StockMarketPanel] K线图渲染完成');
     },
     
     // 更新K线图
     updateKlineChart: function() {
-      if (!this.chartInstance || !this.currentData) return;
+      console.log('[StockMarketPanel] updateKlineChart called', {
+        hasChartInstance: !!this.chartInstance,
+        hasCurrentData: !!this.currentData,
+        klineLength: this.currentData?.kline?.length
+      });
+      
+      if (!this.chartInstance || !this.currentData) {
+        console.warn('[StockMarketPanel] updateKlineChart: missing chartInstance or currentData');
+        return;
+      }
       
       const kline = this.currentData.kline || [];
       const maData = this.currentInsight?.maData || {};
+      
+      if (kline.length === 0) {
+        console.warn('[StockMarketPanel] updateKlineChart: no kline data');
+        return;
+      }
       
       // 根据周期筛选数据
       const filteredKline = kline.slice(-this.currentPeriod);
@@ -1691,7 +1760,18 @@ export const stockMarketPanelScript = `
         ]
       };
       
-      this.chartInstance.setOption(option, true);
+      console.log('[StockMarketPanel] setOption with', {
+        dates: dates.length,
+        ohlc: ohlc.length,
+        series: series.length
+      });
+      
+      try {
+        this.chartInstance.setOption(option, true);
+        console.log('[StockMarketPanel] setOption success');
+      } catch (e) {
+        console.error('[StockMarketPanel] setOption error:', e);
+      }
     },
     
     // 渲染解读侧栏
@@ -1997,18 +2077,18 @@ export const stockMarketPanelScript = `
       }
     },
     
-    // 渲染单个 Tab 解读
+    // 渲染单个 Tab 解读（专业版和白话版上下布局）
     renderSingleTabInsight: function(tabName, insight) {
       // 专业版解读
       const proEl = document.getElementById(tabName + 'InsightPro');
       if (proEl && insight.professional) {
-        proEl.innerHTML = '<div class="insight-text">' + this.formatInsightText(insight.professional) + '</div>';
+        proEl.innerHTML = this.formatInsightText(insight.professional);
       }
       
       // 白话版解读
       const simpleEl = document.getElementById(tabName + 'InsightSimple');
       if (simpleEl && insight.simple) {
-        simpleEl.innerHTML = '<div class="insight-text">' + this.formatInsightText(insight.simple) + '</div>';
+        simpleEl.innerHTML = this.formatInsightText(insight.simple);
       }
       
       // 关键要点
@@ -2017,7 +2097,7 @@ export const stockMarketPanelScript = `
         const keypointsHtml = insight.keyPoints.map(function(point) {
           const typeClass = point.type === 'positive' ? 'positive' : (point.type === 'negative' ? 'negative' : 'neutral');
           const icon = point.type === 'positive' ? 'arrow-up' : (point.type === 'negative' ? 'arrow-down' : 'minus');
-          return '<span class="keypoint-tag ' + typeClass + '"><i class="fas fa-' + icon + '"></i>' + point.text + '</span>';
+          return '<span class="keypoint-tag ' + typeClass + '"><i class="fas fa-' + icon + '"></i> ' + point.text + '</span>';
         }).join('');
         keypointsEl.innerHTML = keypointsHtml;
       }
@@ -2038,29 +2118,6 @@ export const stockMarketPanelScript = `
       var boldPattern = /\\*\\*([^*]+)\\*\\*/g;
       formatted = formatted.replace(boldPattern, '<strong>$1</strong>');
       return formatted;
-    },
-    
-    // 切换解读模式（专业版/白话版）
-    toggleInsightMode: function(tabName, mode) {
-      const proEl = document.getElementById(tabName + 'InsightPro');
-      const simpleEl = document.getElementById(tabName + 'InsightSimple');
-      const section = document.getElementById(tabName + 'InsightSection');
-      
-      if (!proEl || !simpleEl || !section) return;
-      
-      // 更新按钮状态
-      section.querySelectorAll('.insight-mode-btn').forEach(function(btn) {
-        btn.classList.toggle('active', btn.dataset.mode === mode);
-      });
-      
-      // 切换显示内容
-      if (mode === 'professional') {
-        proEl.classList.add('active');
-        simpleEl.classList.remove('active');
-      } else {
-        proEl.classList.remove('active');
-        simpleEl.classList.add('active');
-      }
     },
     
     // 显示解读错误
