@@ -30,11 +30,35 @@ API 端点:
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 import akshare as ak
 import pandas as pd
-from typing import Optional
+import numpy as np
+from typing import Optional, Any
 import traceback
 import sys
+import math
+import json
+
+
+def safe_json_dumps(obj: Any) -> str:
+    """安全的 JSON 序列化，处理 NaN 和 Inf"""
+    def sanitize(o):
+        if isinstance(o, dict):
+            return {k: sanitize(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [sanitize(item) for item in o]
+        if isinstance(o, (float, np.floating)):
+            if pd.isna(o) or np.isnan(o) or np.isinf(o):
+                return 0
+            return float(o)
+        if isinstance(o, np.integer):
+            return int(o)
+        if pd.isna(o):
+            return None
+        return o
+    
+    return json.dumps(sanitize(obj), ensure_ascii=False)
 
 # 创建 FastAPI 应用
 app = FastAPI(
@@ -60,12 +84,86 @@ async def health_check():
     return {
         "status": "ok",
         "service": "akshare-hk-proxy",
-        "version": "1.0.0",
+        "version": "1.2.0",  # 更新版本号
         "akshare_version": ak.__version__ if hasattr(ak, '__version__') else "unknown"
     }
 
 
+# ============ 诊断端点 ============
+@app.get("/diagnose/{stock_code}")
+async def diagnose_stock(stock_code: str):
+    """
+    诊断港股数据获取状态
+    
+    检查所有财务报表是否可以成功获取
+    """
+    code = stock_code.replace('.HK', '').replace('.hk', '').strip()
+    code = code.zfill(5)
+    
+    results = {
+        "stock_code": code,
+        "akshare_version": ak.__version__ if hasattr(ak, '__version__') else "unknown",
+        "reports": {}
+    }
+    
+    for report_type, symbol in [("income", "利润表"), ("balance", "资产负债表"), ("cashflow", "现金流量表")]:
+        try:
+            df = ak.stock_financial_hk_report_em(
+                stock=code,
+                symbol=symbol,
+                indicator="年度"
+            )
+            if df is not None and not df.empty:
+                results["reports"][report_type] = {
+                    "success": True,
+                    "count": len(df),
+                    "fields": df['STD_ITEM_NAME'].unique().tolist()[:10] if 'STD_ITEM_NAME' in df.columns else []
+                }
+            else:
+                results["reports"][report_type] = {
+                    "success": True,
+                    "count": 0,
+                    "message": "Empty data"
+                }
+        except Exception as e:
+            results["reports"][report_type] = {
+                "success": False,
+                "error": str(e)
+            }
+    
+    return results
+
+
 # ============ 港股财务报表 ============
+def clean_value(val):
+    """清理单个值，确保可 JSON 序列化"""
+    if val is None:
+        return None
+    if isinstance(val, (float, np.floating)):
+        if pd.isna(val) or np.isnan(val) or np.isinf(val):
+            return 0.0
+        return float(val)
+    if isinstance(val, np.integer):
+        return int(val)
+    if isinstance(val, (int, str, bool)):
+        return val
+    if pd.isna(val):
+        return None
+    # 其他类型转字符串
+    return str(val)
+
+
+def df_to_json_safe(df: pd.DataFrame) -> list:
+    """将 DataFrame 转换为 JSON 安全的字典列表"""
+    records = []
+    for idx, row in df.iterrows():
+        record = {}
+        for col in df.columns:
+            record[col] = clean_value(row[col])
+        records.append(record)
+    return records
+
+
 @app.get("/hk/financial/{stock_code}/{report_type}")
 async def get_hk_financial(
     stock_code: str,
@@ -91,9 +189,14 @@ async def get_hk_financial(
     }
     
     if report_type not in symbol_map:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid report_type: {report_type}. Must be one of: income, balance, cashflow"
+        return Response(
+            content=json.dumps({
+                "success": False,
+                "error": f"Invalid report_type: {report_type}. Must be one of: income, balance, cashflow",
+                "data": []
+            }, ensure_ascii=False),
+            media_type="application/json",
+            status_code=400
         )
     
     # 标准化股票代码 (确保是5位数字)
@@ -102,6 +205,7 @@ async def get_hk_financial(
     
     try:
         print(f"[AkshareProxy] 获取港股{symbol_map[report_type]}: {code}, 指标: {indicator}")
+        sys.stdout.flush()
         
         # 调用 AKShare 接口
         df = ak.stock_financial_hk_report_em(
@@ -112,33 +216,50 @@ async def get_hk_financial(
         
         if df is None or df.empty:
             print(f"[AkshareProxy] 警告: {code} {symbol_map[report_type]}数据为空")
-            return {
+            sys.stdout.flush()
+            result = {
                 "success": True,
                 "data": [],
                 "message": f"No data found for {code}"
             }
+            return Response(
+                content=json.dumps(result, ensure_ascii=False),
+                media_type="application/json"
+            )
         
-        # 转换为字典列表
-        data = df.to_dict(orient="records")
+        # 使用安全的转换函数
+        data = df_to_json_safe(df)
         
         print(f"[AkshareProxy] 成功获取 {len(data)} 条{symbol_map[report_type]}数据")
+        sys.stdout.flush()
         
-        return {
+        result = {
             "success": True,
             "data": data,
             "count": len(data)
         }
         
+        # 使用标准 json.dumps，因为数据已经被清理
+        return Response(
+            content=json.dumps(result, ensure_ascii=False),
+            media_type="application/json"
+        )
+        
     except Exception as e:
         error_msg = str(e)
         traceback.print_exc()
         print(f"[AkshareProxy] 错误: {error_msg}", file=sys.stderr)
+        sys.stderr.flush()
         
-        return {
+        result = {
             "success": False,
             "error": error_msg,
             "data": []
         }
+        return Response(
+            content=json.dumps(result, ensure_ascii=False),
+            media_type="application/json"
+        )
 
 
 # ============ 港股K线数据 ============

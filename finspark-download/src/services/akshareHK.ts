@@ -80,70 +80,256 @@ interface AkshareRawItem {
 /**
  * 港股利润表字段映射
  * 港股中文项目名 → Tushare A股字段名
+ * 数据来源: AKShare stock_financial_hk_report_em (东方财富)
  */
 const INCOME_FIELD_MAP: Record<string, keyof IncomeData> = {
+  // 核心收入指标
   '营业额': 'total_revenue',
   '收入': 'revenue',
+  '营运收入': 'revenue',
+  '其他营业收入': 'revenue',
+  '其他收入': 'revenue',
+  '其他收益': 'revenue',
+  
+  // 成本相关
   '销售成本': 'total_cogs',
   '销货成本': 'oper_cost',
+  '营运支出': 'oper_cost',
+  
+  // 利润指标
   '毛利': 'operate_profit',  // 港股毛利映射到营业利润
   '经营溢利': 'operate_profit',
   '营业利润': 'operate_profit',
   '除税前溢利': 'operate_profit',
+  '持续经营业务税后利润': 'n_income',
+  
+  // 净利润
   '股东应占溢利': 'n_income_attr_p',
   '归属于母公司股东的净利润': 'n_income_attr_p',
   '净利润': 'n_income',
   '除税后溢利': 'n_income',
+  '少数股东损益': 'minority_gain',
+  
+  // 每股指标
   '每股基本盈利': 'basic_eps',
   '基本每股收益': 'basic_eps',
   '稀释每股收益': 'diluted_eps',
   '每股摊薄盈利': 'diluted_eps',
+  '每股股息': 'basic_eps',  // 映射到 basic_eps 作为备用
+  
+  // 费用
   '销售费用': 'sell_exp',
+  '销售及分销费用': 'sell_exp',
   '管理费用': 'admin_exp',
+  '行政开支': 'admin_exp',
   '研发费用': 'rd_exp',
   '财务费用': 'fin_exp',
   '利息支出': 'fin_exp',
+  '融资成本': 'fin_exp',
+  '利息收入': 'fin_exp',  // 负值
+  
+  // 其他
+  '税项': 'income_tax',
+  '全面收益总额': 'compr_inc_attr_p',
+  '本公司拥有人应占全面收益总额': 'compr_inc_attr_p',
 };
 
 /**
  * 港股资产负债表字段映射
+ * 数据来源: AKShare stock_financial_hk_report_em (东方财富)
  */
 const BALANCE_FIELD_MAP: Record<string, keyof BalanceData> = {
+  // 资产总计
   '总资产': 'total_assets',
   '资产总计': 'total_assets',
+  
+  // 负债总计
   '总负债': 'total_liab',
   '负债合计': 'total_liab',
+  '流动负债合计': 'total_cur_liab',
+  '非流动负债合计': 'total_ncl',
+  
+  // 权益
   '股东权益': 'total_hldr_eqy_exc_min_int',
   '股东权益合计': 'total_hldr_eqy_exc_min_int',
+  '总权益': 'total_hldr_eqy_exc_min_int',
+  '净资产': 'total_hldr_eqy_exc_min_int',
+  '少数股东权益': 'minority_int',
+  '股本': 'share_capital',
+  '股本溢价': 'cap_rese',
+  '储备': 'surplus_rese',
+  '其他储备': 'oth_eqt_tools',
+  '保留溢利(累计亏损)': 'undistr_porfit',
+  '库存股': 'treasury_share',
+  
+  // 现金及等价物
   '现金及等价物': 'money_cap',
   '现金及银行结余': 'money_cap',
   '货币资金': 'money_cap',
+  '短期存款': 'money_cap',
+  '中长期存款': 'oth_cash_inflo_oper_act',
+  '受限制存款及现金': 'restrict_deposit',
+  
+  // 应收应付
   '应收帐款': 'accounts_receiv',
   '应收账款': 'accounts_receiv',
-  '存货': 'inventories',
-  '固定资产': 'fix_assets',
-  '物业厂房及设备': 'fix_assets',
-  '短期借款': 'st_borr',
-  '短期银行贷款': 'st_borr',
-  '长期借款': 'lt_borr',
-  '长期银行贷款': 'lt_borr',
+  '应收关联方款项': 'oth_receiv',
+  '预付款按金及其他应收款': 'prepayment',
+  '预付款项': 'prepayment',
   '应付帐款': 'accounts_pay',
   '应付账款': 'accounts_pay',
+  '其他应付款及应计费用': 'oth_pay',
+  '应付关联方款项(流动)': 'oth_cur_liab',
+  '应付票据': 'notes_pay',
+  '应付票据(非流动)': 'notes_pay',
+  '应付税项': 'taxes_pay',
+  '应付股利': 'div_pay',
+  
+  // 存货
+  '存货': 'inventories',
+  
+  // 固定资产
+  '固定资产': 'fix_assets',
+  '物业厂房及设备': 'fix_assets',
+  '在建工程': 'cip',
+  '无形资产': 'intan_assets',
+  '土地使用权': 'r_and_d',
+  '投资物业': 'invest_prop',
+  
+  // 借款
+  '短期贷款': 'st_borr',
+  '短期银行贷款': 'st_borr',
+  '长期贷款': 'lt_borr',
+  '长期银行贷款': 'lt_borr',
+  '长期应付款': 'lt_pay',
+  '融资租赁负债(流动)': 'st_borr',
+  '融资租赁负债(非流动)': 'lt_borr',
+  
+  // 投资相关
+  '联营公司权益': 'lt_eqt_invest',
+  '合营公司权益': 'lt_eqt_invest',
+  '可供出售投资': 'avail_for_sale_fin_assets',
+  '持有至到期投资': 'held_to_mty_invest',
+  '持有至到期投资(流动)': 'held_to_mty_invest',
+  '交易性金融资产(流动)': 'trad_asset',
+  '其他金融资产(流动)': 'oth_cur_assets',
+  '其他金融资产(非流动)': 'oth_nca',
+  '指定以公允价值记账之金融资产': 'fvtpl_fin_assets',
+  '指定以公允价值记账之金融资产(流动)': 'fvtpl_fin_assets',
+  '于联营公司可赎回工具的投资': 'lt_eqt_invest',
+  
+  // 负债相关
+  '其他金融负债(流动)': 'oth_cur_liab',
+  '其他金融负债(非流动)': 'oth_ncl',
+  '递延收入(流动)': 'deferred_inc',
+  '递延收入(非流动)': 'lt_deferred_income',
+  '递延税项负债': 'defer_tax_liab',
+  '递延税项资产': 'defer_tax_assets',
+  '衍生金融工具-负债(流动)': 'derivative_liab',
+  '衍生金融工具-资产(流动)': 'derivative_assets',
+  
+  // 合计项目
+  '流动资产合计': 'total_cur_assets',
+  '非流动资产合计': 'total_nca',
+  '非流动资产其他项目': 'oth_nca',
+  '净流动资产': 'net_cur_assets',
+  '总资产减流动负债': 'total_assets_net_cur_liab',
+  '总资产减总负债合计': 'total_hldr_eqy_exc_min_int',
+  '总权益及总负债': 'total_assets',
+  '总权益及非流动负债': 'total_ncl_and_eqy',
+  '持作出售的资产(流动)': 'hfs_assets',
 };
 
 /**
  * 港股现金流量表字段映射
+ * 数据来源: AKShare stock_financial_hk_report_em (东方财富)
  */
 const CASHFLOW_FIELD_MAP: Record<string, keyof CashFlowData> = {
+  // 经营活动
   '经营活动产生的现金流量净额': 'n_cashflow_act',
   '经营产生现金': 'n_cashflow_act',
-  '营运资金变动': 'n_cashflow_act',
+  '经营业务现金净额': 'n_cashflow_act',
+  '营运资金变动前经营溢利': 'oper_profit_before_wc',
+  '除税前溢利(业务利润)': 'operate_profit',
+  
+  // 投资活动
   '投资活动产生的现金流量净额': 'n_cashflow_inv_act',
   '投资活动现金': 'n_cashflow_inv_act',
+  '投资业务现金净额': 'n_cashflow_inv_act',
+  '投资支付现金': 'c_inf_dis_d_others',
+  '收回投资所得现金': 'c_fr_disp_other_invest',
+  '收购附属公司': 'c_paid_for_subsi',
+  '出售附属公司': 'c_fr_disposal_group',
+  '已收股息(投资)': 'c_fr_div_inv',
+  '已收利息(投资)': 'c_fr_int_exp',
+  '应收关联方款项(增加)减少(投资)': 'c_fr_oth_operate_a',
+  '持作买卖投资(增加)减少': 'c_fr_trad_asset',
+  
+  // 筹资活动
   '筹资活动产生的现金流量净额': 'n_cash_flows_fnc_act',
   '融资活动现金': 'n_cash_flows_fnc_act',
+  '融资业务现金净额': 'n_cash_flows_fnc_act',
+  '新增借款': 'c_fr_borr',
+  '偿还借款': 'c_repay_debt',
+  '发行股份': 'c_fr_issue_share',
+  '吸收投资所得': 'c_fr_min_s_instr',
+  '发行债券': 'c_fr_borr',
+  '赎回债券': 'c_repay_debt',
+  '回购股份': 'c_pay_for_repurch',
+  '已付股息(融资)': 'c_fr_div_fnc_act',
+  '已付利息(融资)': 'c_int_pay',
+  '已付利息(经营)': 'c_int_exp',
+  '发行相关费用': 'c_pay_acq_const_fiasm',
+  '偿还融资租赁': 'c_repay_debt',
+  '融资前现金净额': 'net_cash_before_fin',
+  '购买子公司少数股权而支付的现金': 'c_pay_for_minority_int',
+  
+  // 固定资产投资
   '购建固定资产': 'c_paid_for_assets',
+  '购建无形资产及其他资产': 'c_paid_for_intan_assets',
   '资本开支': 'c_paid_for_assets',
+  '处置固定资产': 'c_fr_disp_fix_assets',
+  '处置无形资产及其他资产': 'c_fr_disp_intan_assets',
+  
+  // 调整项
+  '加:折旧及摊销': 'depr_fa_coga_dpba',
+  '加:减值及拨备': 'loss_asset_imp',
+  '加:利息支出': 'int_exp',
+  '减:利息收入': 'int_income',
+  '减:投资收益': 'invest_income',
+  '减:出售资产之溢利': 'gain_on_disposal',
+  '减:汇兑收益': 'foreign_ex_loss',
+  '减:重估盈余': 'gain_on_revaluation',
+  '减:应占附属公司溢利': 'invest_income',
+  '加:经营调整其他项目': 'oth_oper_act',
+  
+  // 营运资本变动
+  '存货(增加)减少': 'incr_decr_inv',
+  '应收帐款减少': 'incr_decr_accounts_receiv',
+  '应付帐款及应计费用增加(减少)': 'incr_decr_accounts_pay',
+  '存款(增加)减少': 'incr_decr_depo',
+  '存款减少(增加)': 'incr_decr_depo',
+  '预付款项、按金及其他应收款项减少(增加)': 'incr_decr_prepay',
+  '预收账款、按金及其他应付款增加(减少)': 'incr_decr_adv_receipts',
+  '递延收入(增加)减少': 'incr_decr_deferred_income',
+  '应付关联方款项增加(减少)': 'incr_decr_related_party',
+  '营运资本变动其他项目': 'oth_wc_changes',
+  
+  // 税项
+  '已付税项': 'c_pay_income_tax',
+  
+  // 现金变动
+  '期初现金': 'beg_cash_equiv',
+  '期末现金': 'end_cash_equiv',
+  '现金净额': 'n_incr_cash_cash_equ',
+  '期间变动其他项目': 'oth_cash_inflo',
+  
+  // 业务相关
+  '投资业务其他项目': 'oth_inv_act',
+  '融资业务其他项目': 'oth_fnc_act',
+  '非运算项目': 'non_oper_item',
+  
+  // 自由现金流
   '自由现金流': 'free_cashflow',
 };
 
