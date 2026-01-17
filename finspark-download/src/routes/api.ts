@@ -14,6 +14,7 @@ import { AGENT_PROMPTS } from '../agents/prompts';
 import { optionalAuthMiddleware, optionalAuth, requireFeature } from '../middleware/auth';
 import { generateTabInsights, getCachedInsights, cacheInsights, getInsightCacheTTL } from '../services/stockInsightAgent';
 import { isHKStock } from '../utils/stockCode';
+import { validateReportCompleteness, getValidationLogMessage } from '../utils/reportValidation';
 import type { Bindings, StartAnalysisRequest, AnalysisProgress, AnalysisReport, AgentType, ModelPreference, AgentPromptConfig } from '../types';
 
 const api = new Hono<{ Bindings: Bindings }>();
@@ -452,27 +453,32 @@ api.post('/analyze/start', optionalAuthMiddleware(), async (c) => {
         const cachedReport = await reportsService.getReport(parseInt(cachedReportId));
         
         if (cachedReport && cachedReport.status === 'completed') {
-          // 检查报告是否包含估值评估结果（新版本必须包含）
-          const analysisResult = cachedReport.analysisResult || {};
-          const hasValuation = analysisResult.valuationResult !== undefined;
+          // 【重要】完整性校验 - 确保缓存报告包含所有必需字段
+          const analysisResult = await reportsService.getReportResult(parseInt(cachedReportId));
+          const validation = validateReportCompleteness(analysisResult as Partial<AnalysisReport>);
           
-          // 即使缺少估值数据，也优先使用已完成的缓存报告（避免配额不足时无法使用）
-          // 后续可以在配额充足时单独更新估值数据
-          if (!hasValuation) {
-            console.log(`[Cache Warning] Report ${cachedReportId} missing valuationResult, but using cached data to avoid quota issues`);
+          console.log(getValidationLogMessage(cachedReportId, validation));
+          
+          if (validation.severity === 'critical') {
+            // 严重不完整 - 必须重新分析，删除无效缓存
+            console.log(`[Cache Invalid] Report ${cachedReportId} is critically incomplete, triggering re-analysis`);
+            await c.env.CACHE.delete(cacheKey);
+            // 继续执行新分析流程（不返回，跳出缓存检查）
           } else {
-            console.log(`[Cache Hit] Reusing analysis ${cachedReportId} for ${body.companyCode}`);
+            // 完整或可接受 - 返回缓存报告
+            console.log(`[Cache Hit] Reusing complete analysis ${cachedReportId} for ${body.companyCode}`);
+            
+            return c.json({
+              success: true,
+              reportId: parseInt(cachedReportId),
+              estimatedTime: 0, // 即时可用
+              message: '使用已有分析结果（24小时内）',
+              cached: true,
+              complete: validation.isComplete,
+              completenessPercent: validation.completenessPercent,
+              useD1: true,
+            });
           }
-          
-          // 直接返回缓存的报告ID
-          return c.json({
-            success: true,
-            reportId: parseInt(cachedReportId),
-            estimatedTime: 0, // 即时可用
-            message: hasValuation ? '使用已有分析结果（24小时内）' : '使用已有分析结果（部分数据可能不完整）',
-            cached: true,
-            useD1: true,
-          });
         }
       }
       
@@ -509,20 +515,39 @@ api.post('/analyze/start', optionalAuthMiddleware(), async (c) => {
       ).bind(body.companyCode, reportType).first<{id: number, status: string, result_json: string}>();
       
       if (recentReport && recentReport.status === 'completed') {
-        console.log(`[DB Fallback] Found completed report ${recentReport.id} for ${body.companyCode}`);
+        // 【重要】数据库回退也需要完整性校验
+        let analysisResult: Partial<AnalysisReport> | null = null;
+        try {
+          analysisResult = recentReport.result_json ? JSON.parse(recentReport.result_json) : null;
+        } catch (e) {
+          console.warn(`[DB Fallback] Failed to parse result_json for report ${recentReport.id}`);
+        }
         
-        // 重新设置 KV 缓存，以便下次快速命中
-        const cacheKey = `shared:analysis:${body.companyCode}:${reportType}`;
-        await c.env.CACHE.put(cacheKey, String(recentReport.id), { expirationTtl: 86400 }); // 24小时
+        const validation = validateReportCompleteness(analysisResult);
+        console.log(getValidationLogMessage(recentReport.id, validation));
         
-        return c.json({
-          success: true,
-          reportId: recentReport.id,
-          estimatedTime: 0,
-          message: '使用已有分析结果',
-          cached: true,
-          useD1: true,
-        });
+        if (validation.severity === 'critical') {
+          // 数据库中的报告也不完整，需要重新分析
+          console.log(`[DB Fallback Invalid] Report ${recentReport.id} is incomplete, triggering re-analysis`);
+          // 继续执行新分析流程
+        } else {
+          console.log(`[DB Fallback] Found complete report ${recentReport.id} for ${body.companyCode}`);
+          
+          // 重新设置 KV 缓存，以便下次快速命中
+          const cacheKey = `shared:analysis:${body.companyCode}:${reportType}`;
+          await c.env.CACHE.put(cacheKey, String(recentReport.id), { expirationTtl: 86400 }); // 24小时
+          
+          return c.json({
+            success: true,
+            reportId: recentReport.id,
+            estimatedTime: 0,
+            message: '使用已有分析结果',
+            cached: true,
+            complete: validation.isComplete,
+            completenessPercent: validation.completenessPercent,
+            useD1: true,
+          });
+        }
       }
       // ============ 数据库回退检查结束 ============
     }
@@ -681,13 +706,15 @@ api.post('/analyze/start', optionalAuthMiddleware(), async (c) => {
         }
 
         // 执行分析
+        // 注意：includeBusinessModel 和 includeForecast 已改为必选，不再从请求参数读取
         const result = await orchestrator.analyze({
           companyCode: body.companyCode,
           companyName: companyName!,
           reportType: body.reportType || 'annual',
           reportPeriod: body.reportPeriod,
-          includeBusinessModel: body.options?.includeBusinessModel ?? true,
-          includeForecast: body.options?.includeForecast ?? true,
+          // 商业模式和业绩预测已改为必选，以下参数仅为向后兼容保留
+          // includeBusinessModel: true,  // 已废弃，始终执行
+          // includeForecast: true,       // 已废弃，始终执行
         });
 
         // 保存结果
@@ -1174,18 +1201,17 @@ api.post('/analyze/force-reanalyze', optionalAuthMiddleware(), async (c) => {
           await currentReportsService.updateStatus(reportId, 'processing');
         }
 
-        console.log(`[Force Reanalyze] Starting analysis for ${body.companyCode}, includeBusinessModel: true`);
+        console.log(`[Force Reanalyze] Starting analysis for ${body.companyCode} (all agents mandatory)`);
         
+        // 注意：商业模式和业绩预测已改为必选，不再需要显式指定
         const result = await orchestrator.analyze({
           companyCode: body.companyCode,
           companyName: companyName!,
           reportType: body.reportType || 'annual',
           reportPeriod: body.reportPeriod,
-          includeBusinessModel: true,  // 强制包含商业模式分析
-          includeForecast: true,       // 强制包含业绩预测
         });
 
-        console.log(`[Force Reanalyze] Analysis completed, businessModelResult: ${result.businessModelResult ? 'present' : 'missing'}`);
+        console.log(`[Force Reanalyze] Analysis completed, businessModelResult: ${result.businessModelResult ? 'present' : 'missing'}, forecastResult: ${result.forecastResult ? 'present' : 'missing'}`);
 
         if (currentReportsService) {
           await currentReportsService.saveResult(reportId, result);
