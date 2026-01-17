@@ -5245,10 +5245,22 @@ app.get('/analysis', (c) => {
             
             console.log('[normalizeInterpretationData] 输入数据结构:', Object.keys(data || {}));
             
-            // === 兼容旧格式缓存: { trend_analysis: { netProfit: { trend, description }, ... } } ===
+            // === 判断数据格式 ===
+            // 格式1: { trend_analysis: { netProfit: { trend, description }, ... } }
+            // 格式2: { netProfit: { trend, description }, ... } (直接结构)
+            let trendAnalysis = null;
+            
             if (data && data.trend_analysis && typeof data.trend_analysis === 'object') {
-                console.log('[normalizeInterpretationData] 检测到旧格式 trend_analysis，进行转换');
-                const trendAnalysis = data.trend_analysis;
+                console.log('[normalizeInterpretationData] 检测到 trend_analysis 嵌套格式');
+                trendAnalysis = data.trend_analysis;
+            } else if (data && (data.netProfit || data.revenue || data.grossMargin)) {
+                // 直接是 { netProfit: {...}, revenue: {...} } 格式
+                console.log('[normalizeInterpretationData] 检测到直接格式（非嵌套）');
+                trendAnalysis = data;
+            }
+            
+            if (trendAnalysis) {
+                console.log('[normalizeInterpretationData] 开始转换趋势数据，指标:', Object.keys(trendAnalysis));
                 
                 metricKeys.forEach(key => {
                     const raw = trendAnalysis[key];
@@ -5323,7 +5335,7 @@ app.get('/analysis', (c) => {
                     };
                 });
                 
-                console.log('[normalizeInterpretationData] 旧格式转换完成，指标数:', Object.keys(normalized).length);
+                console.log('[normalizeInterpretationData] 趋势数据转换完成，指标数:', Object.keys(normalized).length);
                 return normalized;
             }
             
@@ -5855,12 +5867,34 @@ app.get('/analysis', (c) => {
             if (incomeChart) incomeChart.resize();
         });
         
+        // 图表加载状态追踪
+        let chartLoadingState = {
+            isLoading: false,
+            loadedCode: null,
+            controller: null
+        };
+        
         // 加载图表数据
         async function loadChartData(companyCode) {
             if (!companyCode) {
                 console.warn('[Chart] No company code provided');
                 return;
             }
+            
+            // 如果已经加载过相同股票的图表，跳过
+            if (chartLoadingState.loadedCode === companyCode) {
+                console.log('[Chart] 图表已加载，跳过重复请求:', companyCode);
+                return;
+            }
+            
+            // 如果正在加载中，取消之前的请求
+            if (chartLoadingState.isLoading && chartLoadingState.controller) {
+                console.log('[Chart] 取消之前的加载请求');
+                chartLoadingState.controller.abort();
+            }
+            
+            // 标记开始加载
+            chartLoadingState.isLoading = true;
             
             // 显示加载状态
             const mainChartDom = document.getElementById('mainFinancialChart');
@@ -5875,9 +5909,10 @@ app.get('/analysis', (c) => {
             try {
                 console.log('[Chart] Loading chart data for:', companyCode);
                 
-                // 添加超时控制
+                // 添加超时控制 - 增加到120秒，因为财务数据API可能需要较长时间
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超时
+                chartLoadingState.controller = controller;
+                const timeoutId = setTimeout(() => controller.abort(), 120000); // 120秒超时
                 
                 const response = await fetch(\`/api/chart/financial/\${companyCode}\`, {
                     signal: controller.signal
@@ -5906,6 +5941,8 @@ app.get('/analysis', (c) => {
                     try {
                         initMainChart(data.data);
                         console.log('[Chart] 主图表初始化完成');
+                        // 标记加载成功
+                        chartLoadingState.loadedCode = companyCode;
                     } catch (err) {
                         console.error('[Chart] 主图表初始化失败:', err);
                         if (mainChartDom) {
@@ -5919,11 +5956,20 @@ app.get('/analysis', (c) => {
                     }
                 }
             } catch (error) {
+                // 如果是被主动取消的请求（新请求取代了旧请求），静默忽略
+                if (error.name === 'AbortError') {
+                    console.log('[Chart] 请求被取消（被新请求替代）');
+                    // 不显示错误，让新请求处理
+                    return;
+                }
                 console.error('[Chart] Error loading chart data:', error);
-                const errorMsg = error.name === 'AbortError' ? '请求超时' : (error.message || '网络错误');
+                const errorMsg = error.message || '网络错误';
                 if (mainChartDom) {
                     mainChartDom.innerHTML = \`<div class="flex items-center justify-center h-full text-gray-500"><i class="fas fa-exclamation-triangle mr-2"></i>图表加载失败: \${errorMsg}</div>\`;
                 }
+            } finally {
+                chartLoadingState.isLoading = false;
+                chartLoadingState.controller = null;
             }
         }
         
