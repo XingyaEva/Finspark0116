@@ -50,7 +50,7 @@ source venv/bin/activate
 
 echo -e "${GREEN}[5/7] 安装 Python 依赖包...${NC}"
 pip install --upgrade pip -q
-pip install fastapi uvicorn akshare pandas -q
+pip install fastapi uvicorn akshare pandas numpy -q
 
 echo -e "${GREEN}[6/7] 创建代理服务代码...${NC}"
 cat > $DEPLOY_DIR/akshare_proxy.py << 'PYTHON_CODE'
@@ -63,23 +63,27 @@ AKShare 港股数据代理服务
 2. 封装 AKShare 港股财务报表接口
 3. 支持利润表、资产负债表、现金流量表
 4. 支持 K 线数据和股票基本信息
+5. 处理 NaN/Inf 值，确保 JSON 序列化安全
 
 数据来源: AKShare (东方财富)
 """
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 import akshare as ak
 import pandas as pd
-from typing import Optional
+import numpy as np
+from typing import Optional, Any
 import traceback
 import sys
+import json
 
 # 创建 FastAPI 应用
 app = FastAPI(
     title="AKShare HK Stock Proxy",
     description="港股财务数据代理服务 - 为 Finspark 提供港股三大财务报表数据",
-    version="1.0.0"
+    version="1.3.0"
 )
 
 # CORS 配置 - 允许所有来源
@@ -92,6 +96,36 @@ app.add_middleware(
 )
 
 
+# ============ JSON 安全处理函数 ============
+def clean_value(val):
+    """清理单个值，确保可 JSON 序列化"""
+    if val is None:
+        return None
+    if isinstance(val, (float, np.floating)):
+        if pd.isna(val) or np.isnan(val) or np.isinf(val):
+            return 0.0
+        return float(val)
+    if isinstance(val, np.integer):
+        return int(val)
+    if isinstance(val, (int, str, bool)):
+        return val
+    if pd.isna(val):
+        return None
+    # 其他类型转字符串
+    return str(val)
+
+
+def df_to_json_safe(df: pd.DataFrame) -> list:
+    """将 DataFrame 转换为 JSON 安全的字典列表"""
+    records = []
+    for idx, row in df.iterrows():
+        record = {}
+        for col in df.columns:
+            record[col] = clean_value(row[col])
+        records.append(record)
+    return records
+
+
 # ============ 健康检查 ============
 @app.get("/health")
 async def health_check():
@@ -99,9 +133,54 @@ async def health_check():
     return {
         "status": "ok",
         "service": "akshare-hk-proxy",
-        "version": "1.0.0",
+        "version": "1.3.0",
         "akshare_version": ak.__version__ if hasattr(ak, '__version__') else "unknown"
     }
+
+
+# ============ 诊断端点 ============
+@app.get("/diagnose/{stock_code}")
+async def diagnose_stock(stock_code: str):
+    """
+    诊断港股数据获取状态
+    
+    检查所有财务报表是否可以成功获取
+    """
+    code = stock_code.replace('.HK', '').replace('.hk', '').strip()
+    code = code.zfill(5)
+    
+    results = {
+        "stock_code": code,
+        "akshare_version": ak.__version__ if hasattr(ak, '__version__') else "unknown",
+        "reports": {}
+    }
+    
+    for report_type, symbol in [("income", "利润表"), ("balance", "资产负债表"), ("cashflow", "现金流量表")]:
+        try:
+            df = ak.stock_financial_hk_report_em(
+                stock=code,
+                symbol=symbol,
+                indicator="年度"
+            )
+            if df is not None and not df.empty:
+                results["reports"][report_type] = {
+                    "success": True,
+                    "count": len(df),
+                    "fields": df['STD_ITEM_NAME'].unique().tolist()[:10] if 'STD_ITEM_NAME' in df.columns else []
+                }
+            else:
+                results["reports"][report_type] = {
+                    "success": True,
+                    "count": 0,
+                    "message": "Empty data"
+                }
+        except Exception as e:
+            results["reports"][report_type] = {
+                "success": False,
+                "error": str(e)
+            }
+    
+    return results
 
 
 # ============ 港股财务报表 ============
@@ -130,9 +209,14 @@ async def get_hk_financial(
     }
     
     if report_type not in symbol_map:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid report_type: {report_type}. Must be one of: income, balance, cashflow"
+        return Response(
+            content=json.dumps({
+                "success": False,
+                "error": f"Invalid report_type: {report_type}. Must be one of: income, balance, cashflow",
+                "data": []
+            }, ensure_ascii=False),
+            media_type="application/json",
+            status_code=400
         )
     
     # 标准化股票代码 (确保是5位数字)
@@ -141,6 +225,7 @@ async def get_hk_financial(
     
     try:
         print(f"[AkshareProxy] 获取港股{symbol_map[report_type]}: {code}, 指标: {indicator}")
+        sys.stdout.flush()
         
         # 调用 AKShare 接口
         df = ak.stock_financial_hk_report_em(
@@ -151,33 +236,50 @@ async def get_hk_financial(
         
         if df is None or df.empty:
             print(f"[AkshareProxy] 警告: {code} {symbol_map[report_type]}数据为空")
-            return {
+            sys.stdout.flush()
+            result = {
                 "success": True,
                 "data": [],
                 "message": f"No data found for {code}"
             }
+            return Response(
+                content=json.dumps(result, ensure_ascii=False),
+                media_type="application/json"
+            )
         
-        # 转换为字典列表
-        data = df.to_dict(orient="records")
+        # 使用安全的转换函数
+        data = df_to_json_safe(df)
         
         print(f"[AkshareProxy] 成功获取 {len(data)} 条{symbol_map[report_type]}数据")
+        sys.stdout.flush()
         
-        return {
+        result = {
             "success": True,
             "data": data,
             "count": len(data)
         }
         
+        # 使用标准 json.dumps，因为数据已经被清理
+        return Response(
+            content=json.dumps(result, ensure_ascii=False),
+            media_type="application/json"
+        )
+        
     except Exception as e:
         error_msg = str(e)
         traceback.print_exc()
         print(f"[AkshareProxy] 错误: {error_msg}", file=sys.stderr)
+        sys.stderr.flush()
         
-        return {
+        result = {
             "success": False,
             "error": error_msg,
             "data": []
         }
+        return Response(
+            content=json.dumps(result, ensure_ascii=False),
+            media_type="application/json"
+        )
 
 
 # ============ 港股K线数据 ============
@@ -187,9 +289,7 @@ async def get_hk_kline(
     days: int = Query(180, description="获取最近N天的数据"),
     adjust: str = Query("qfq", description="复权类型: qfq(前复权), hfq(后复权), 空(不复权)")
 ):
-    """
-    获取港股K线数据
-    """
+    """获取港股K线数据"""
     code = stock_code.replace('.HK', '').replace('.hk', '').strip()
     code = code.zfill(5)
     
@@ -230,7 +330,7 @@ async def get_hk_kline(
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y%m%d')
         
-        data = df.to_dict(orient="records")
+        data = df_to_json_safe(df)
         
         print(f"[AkshareProxy] 成功获取 {len(data)} 条K线数据")
         
@@ -395,10 +495,10 @@ async def get_hk_daily_basic(stock_code: str):
                         "success": True,
                         "data": [{
                             "trade_date": str(latest.get('日期', '')).replace('-', ''),
-                            "close": float(latest.get('收盘价', 0) or 0),
-                            "pe": float(latest.get('市盈率', 0) or 0),
-                            "pe_ttm": float(latest.get('市盈率TTM', 0) or latest.get('市盈率', 0) or 0),
-                            "pb": float(latest.get('市净率', 0) or 0),
+                            "close": float(clean_value(latest.get('收盘价', 0)) or 0),
+                            "pe": float(clean_value(latest.get('市盈率', 0)) or 0),
+                            "pe_ttm": float(clean_value(latest.get('市盈率TTM', 0) or latest.get('市盈率', 0)) or 0),
+                            "pb": float(clean_value(latest.get('市净率', 0)) or 0),
                             "ps": 0,
                             "ps_ttm": 0,
                             "turnover_rate": 0,
@@ -408,8 +508,8 @@ async def get_hk_daily_basic(stock_code: str):
                             "total_share": 0,
                             "float_share": 0,
                             "free_share": 0,
-                            "total_mv": float(latest.get('总市值', 0) or 0),
-                            "circ_mv": float(latest.get('流通市值', 0) or latest.get('总市值', 0) or 0)
+                            "total_mv": float(clean_value(latest.get('总市值', 0)) or 0),
+                            "circ_mv": float(clean_value(latest.get('流通市值', 0) or latest.get('总市值', 0)) or 0)
                         }]
                     }
         except Exception as e:
@@ -423,8 +523,8 @@ async def get_hk_daily_basic(stock_code: str):
                     "success": True,
                     "data": [{
                         "trade_date": str(latest.get('日期', '')).replace('-', ''),
-                        "close": float(latest.get('收盘', 0) or 0),
-                        "turnover_rate": float(latest.get('换手率', 0) or 0),
+                        "close": float(clean_value(latest.get('收盘', 0)) or 0),
+                        "turnover_rate": float(clean_value(latest.get('换手率', 0)) or 0),
                         "pe": 0,
                         "pe_ttm": 0,
                         "pb": 0,
@@ -513,6 +613,110 @@ async def get_hk_main_biz(stock_code: str):
         }
 
 
+# ============ 港股列表（港股通成分股）============
+@app.get("/hk/stock_list")
+async def get_hk_stock_list():
+    """获取港股通成分股列表（可通过港股通交易的港股）"""
+    try:
+        print(f"[AkshareProxy] 获取港股通成分股列表...")
+        
+        df = ak.stock_hk_ggt_components_em()
+        
+        if df is None or df.empty:
+            return {
+                "success": True,
+                "data": [],
+                "count": 0,
+                "message": "No HK stock data found"
+            }
+        
+        stocks = []
+        for _, row in df.iterrows():
+            code = str(row.get('代码', '')).strip()
+            name = str(row.get('名称', '')).strip()
+            
+            if code and name:
+                stocks.append({
+                    "ts_code": f"{code}.HK",
+                    "symbol": code,
+                    "name": name,
+                    "market": "HK",
+                    "stock_type": "HK"
+                })
+        
+        print(f"[AkshareProxy] 成功获取 {len(stocks)} 只港股通成分股")
+        
+        return {
+            "success": True,
+            "data": stocks,
+            "count": len(stocks)
+        }
+        
+    except Exception as e:
+        error_msg = str(e)
+        traceback.print_exc()
+        print(f"[AkshareProxy] 错误: {error_msg}", file=sys.stderr)
+        
+        return {
+            "success": False,
+            "error": error_msg,
+            "data": [],
+            "count": 0
+        }
+
+
+# ============ 所有港股列表（实时行情）============
+@app.get("/hk/all_stocks")
+async def get_all_hk_stocks():
+    """获取所有港股列表（从实时行情获取）"""
+    try:
+        print(f"[AkshareProxy] 获取所有港股列表...")
+        
+        df = ak.stock_hk_spot_em()
+        
+        if df is None or df.empty:
+            return {
+                "success": True,
+                "data": [],
+                "count": 0,
+                "message": "No HK stock data found"
+            }
+        
+        stocks = []
+        for _, row in df.iterrows():
+            code = str(row.get('代码', '')).strip()
+            name = str(row.get('名称', '')).strip()
+            
+            if code and name:
+                stocks.append({
+                    "ts_code": f"{code}.HK",
+                    "symbol": code,
+                    "name": name,
+                    "market": "HK",
+                    "stock_type": "HK"
+                })
+        
+        print(f"[AkshareProxy] 成功获取 {len(stocks)} 只港股")
+        
+        return {
+            "success": True,
+            "data": stocks,
+            "count": len(stocks)
+        }
+        
+    except Exception as e:
+        error_msg = str(e)
+        traceback.print_exc()
+        print(f"[AkshareProxy] 错误: {error_msg}", file=sys.stderr)
+        
+        return {
+            "success": False,
+            "error": error_msg,
+            "data": [],
+            "count": 0
+        }
+
+
 # ============ 主程序入口 ============
 if __name__ == "__main__":
     import uvicorn
@@ -557,6 +761,7 @@ systemctl daemon-reload
 
 # 启用并启动服务
 systemctl enable akshare-proxy
+systemctl stop akshare-proxy 2>/dev/null || true
 systemctl start akshare-proxy
 
 echo ""
