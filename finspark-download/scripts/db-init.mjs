@@ -252,8 +252,15 @@ function importSeedData(prod = false, verbose = false) {
 // 全量股票同步
 // ============================================
 
-async function syncAllStocks(prod = false, verbose = false, fullAStock = false) {
-  log(fullAStock ? '执行全量A股同步 (5400+)...' : '执行增量股票同步...', 'step');
+async function syncAllStocks(prod = false, verbose = false, syncType = 'a') {
+  // syncType: 'a' = 仅A股, 'hk' = 仅港股, 'all' = A股+港股
+  const typeLabels = {
+    'a': 'A股 (5400+)',
+    'hk': '港股 (2700+)',
+    'all': 'A股+港股 (8100+)'
+  };
+  
+  log(`执行全量${typeLabels[syncType] || '股票'}同步...`, 'step');
   
   const syncScript = join(PROJECT_ROOT, 'scripts/sync_all_stocks.mjs');
   
@@ -263,21 +270,47 @@ async function syncAllStocks(prod = false, verbose = false, fullAStock = false) 
   }
   
   try {
-    const args = ['--full', '--hot', '--a-stock'];  // 默认仅同步A股
-    if (prod) args.push('--prod');
-    if (verbose) args.push('--verbose');
+    // 根据同步类型构建参数
+    if (syncType === 'all') {
+      // 全量同步: 先同步港股，再同步A股
+      log('第 1 步: 同步港股数据...');
+      const hkArgs = ['--full', '--hot', '--hk-stock'];
+      if (prod) hkArgs.push('--prod');
+      if (verbose) hkArgs.push('--verbose');
+      
+      runCommand(`node scripts/sync_all_stocks.mjs ${hkArgs.join(' ')}`, {
+        silent: false,
+      });
+      
+      log('第 2 步: 同步A股数据...');
+      const aArgs = ['--hot', '--a-stock'];  // 不使用 --full，保留港股数据
+      if (prod) aArgs.push('--prod');
+      if (verbose) aArgs.push('--verbose');
+      
+      runCommand(`node scripts/sync_all_stocks.mjs ${aArgs.join(' ')}`, {
+        silent: false,
+      });
+    } else {
+      const args = ['--full', '--hot'];
+      if (syncType === 'hk') {
+        args.push('--hk-stock');
+        log('正在从 Tushare 获取港股数据，预计需要 10-30 秒...');
+      } else {
+        args.push('--a-stock');
+        log('正在从 Tushare 获取 A 股数据，预计需要 30-60 秒...');
+      }
+      if (prod) args.push('--prod');
+      if (verbose) args.push('--verbose');
+      
+      runCommand(`node scripts/sync_all_stocks.mjs ${args.join(' ')}`, {
+        silent: false,
+      });
+    }
     
-    log(`运行: node scripts/sync_all_stocks.mjs ${args.join(' ')}`);
-    log('正在从 Tushare 获取全量 A 股数据，预计需要 10-30 秒...');
-    
-    runCommand(`node scripts/sync_all_stocks.mjs ${args.join(' ')}`, {
-      silent: false,  // 显示同步进度
-    });
-    
-    log('全量A股同步完成', 'success');
+    log(`${typeLabels[syncType] || '股票'}同步完成`, 'success');
     return true;
   } catch (error) {
-    log(`全量同步失败: ${error.message}`, 'error');
+    log(`同步失败: ${error.message}`, 'error');
     return false;
   }
 }
@@ -444,7 +477,7 @@ function checkRequiredTables(prod = false) {
 // ============================================
 
 async function main() {
-  console.log('\n' + colors.bold('🗄️  Finspark 数据库初始化工具 v3.0 (全量A股版)') + '\n');
+  console.log('\n' + colors.bold('🗄️  Finspark 数据库初始化工具 v3.1 (A股+港股版)') + '\n');
   
   const args = process.argv.slice(2);
   const fullInit = args.includes('--full');
@@ -452,7 +485,8 @@ async function main() {
   const migrateOnly = args.includes('--migrate-only');
   const seedOnly = args.includes('--seed-only');
   const sync = args.includes('--sync');
-  const syncAll = args.includes('--sync-all');  // 全量A股同步 (5400+)
+  const syncAll = args.includes('--sync-all');  // 全量A股+港股同步 (8100+)
+  const syncHK = args.includes('--sync-hk');   // 仅港股同步
   const skipSync = args.includes('--skip-sync'); // 跳过同步，仅使用种子数据
   const prod = args.includes('--prod');
   const verbose = args.includes('--verbose');
@@ -469,15 +503,19 @@ async function main() {
   --migrate-only  仅执行数据库迁移
   --seed-only     仅导入种子数据
   --sync          包含增量股票同步
-  --sync-all      全量A股同步（从 Tushare 获取 5400+ 股票）★推荐
+  --sync-all      全量A股+港股同步（从 Tushare 获取 8100+ 股票）★推荐
+  --sync-hk       仅同步港股数据（2700+ 只）
   --skip-sync     跳过同步，仅使用种子数据（169只）
   --prod          操作生产环境（默认本地）
   --verbose       显示详细日志
   --help, -h      显示此帮助信息
 
 示例:
-  # 首次初始化 + 全量A股同步（推荐，约5400+股票）
+  # 首次初始化 + 全量A股+港股同步（推荐，约8100+股票）
   node scripts/db-init.mjs --full --sync-all
+
+  # 仅同步港股数据
+  node scripts/db-init.mjs --sync-hk
 
   # 快速初始化（仅种子数据，169只股票）
   node scripts/db-init.mjs --full --skip-sync
@@ -491,7 +529,7 @@ async function main() {
     return;
   }
   
-  log(`配置: 环境=${prod ? '生产' : '本地'}, 完整=${fullInit}, 重置=${reset}, 全量同步=${syncAll}, 跳过同步=${skipSync}`);
+  log(`配置: 环境=${prod ? '生产' : '本地'}, 完整=${fullInit}, 重置=${reset}, 全量同步=${syncAll}, 港股同步=${syncHK}, 跳过同步=${skipSync}`);
   console.log('');
   
   // 检查当前状态
@@ -527,12 +565,16 @@ async function main() {
   
   // 全量同步
   if (syncAll) {
-    // 全量A股同步 (5400+)
-    await syncAllStocks(prod, verbose, true);  // true = 全量模式
+    // 全量A股+港股同步 (8100+)
+    await syncAllStocks(prod, verbose, 'all');  // 'all' = A股+港股
+    console.log('');
+  } else if (syncHK) {
+    // 仅港股同步
+    await syncAllStocks(prod, verbose, 'hk');
     console.log('');
   } else if (sync) {
-    // 增量同步
-    await syncAllStocks(prod, verbose, false);
+    // 增量同步（仅A股）
+    await syncAllStocks(prod, verbose, 'a');
     console.log('');
   }
   
