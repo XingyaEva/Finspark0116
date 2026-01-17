@@ -55,7 +55,9 @@ export interface AnalysisOptions {
   companyName: string;
   reportType: 'quarterly' | 'annual';
   reportPeriod?: string;
+  /** @deprecated 商业模式分析已改为必选，此参数将被忽略 */
   includeBusinessModel?: boolean;
+  /** @deprecated 业绩预测已改为必选，此参数将被忽略 */
   includeForecast?: boolean;
   agentModelConfig?: AgentModelConfig;  // 可在分析时覆盖模型配置
 }
@@ -187,11 +189,10 @@ ${trimmedUserPrompt}
     this.completedAgents = [];
 
     // 计算需要执行的Agent数量
-    this.totalAgents = 8; // 基础Agent数量（包含趋势解读Agent）
-    if (options.includeBusinessModel) this.totalAgents++;
-    if (options.includeForecast) this.totalAgents++;
-    this.totalAgents++; // Valuation（估值评估，始终执行）
-    this.totalAgents++; // Final Conclusion
+    // 基础Agent: Planning(1) + 三表分析(3) + 趋势解读(1) + 盈利质量(1) + 风险(1) + 业务洞察(1) = 8
+    // 必选Agent: 商业模式(1) + 业绩预测(1) + 估值评估(1) + 最终结论(1) = 4
+    // 总计: 12个Agent
+    this.totalAgents = 12;
 
     // 1. 获取财务数据
     this.reportProgress('数据获取');
@@ -246,35 +247,33 @@ ${trimmedUserPrompt}
     this.markCompleted('RISK');
     this.markCompleted('BUSINESS_INSIGHT');
 
-    // 5. Phase 3: 可选执行 + 估值评估
+    // 5. Phase 3: 商业模式 + 业绩预测 + 估值评估（全部必选）
     let businessModelResult: BusinessModelResult | undefined;
     let forecastResult: ForecastResult | undefined;
     let valuationResult: ValuationResult | undefined;
 
-    if (options.includeBusinessModel) {
-      this.reportProgress('商业模式分析');
-      // 传入主营业务构成数据，用于深入分析商业模式
-      businessModelResult = await this.runBusinessModelAgent(
-        businessInsightResult,
-        financialData.mainBiz
-      );
-      this.markCompleted('BUSINESS_MODEL');
-    }
+    // 商业模式分析 - 必选执行
+    // 注：includeBusinessModel 参数已废弃，始终执行商业模式分析
+    this.reportProgress('商业模式分析');
+    businessModelResult = await this.runBusinessModelAgent(
+      businessInsightResult,
+      financialData.mainBiz
+    );
+    this.markCompleted('BUSINESS_MODEL');
 
-    if (options.includeForecast) {
-      this.reportProgress('业绩预测');
-      // 传入业绩预告、业绩快报和财务指标数据，用于更准确的预测
-      forecastResult = await this.runForecastAgent(
-        profitabilityResult,
-        businessInsightResult,
-        financialData.forecast,
-        financialData.express,
-        financialData.finaIndicator
-      );
-      this.markCompleted('FORECAST');
-    }
+    // 业绩预测 - 必选执行
+    // 注：includeForecast 参数已废弃，始终执行业绩预测
+    this.reportProgress('业绩预测');
+    forecastResult = await this.runForecastAgent(
+      profitabilityResult,
+      businessInsightResult,
+      financialData.forecast,
+      financialData.express,
+      financialData.finaIndicator
+    );
+    this.markCompleted('FORECAST');
 
-    // 估值评估 - 始终执行（基于市场数据进行估值分析）
+    // 估值评估 - 必选执行（基于市场数据进行估值分析）
     this.reportProgress('估值评估');
     valuationResult = await this.runValuationAgent(
       financialData,

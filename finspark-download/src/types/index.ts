@@ -484,9 +484,11 @@ export interface StartAnalysisRequest {
   reportType: 'quarterly' | 'annual';
   reportPeriod?: string;
   options?: {
-    includeBusinessModel: boolean;
-    includeForecast: boolean;
-    includeComic: boolean;
+    /** @deprecated 商业模式分析已改为必选，此参数将被忽略 */
+    includeBusinessModel?: boolean;
+    /** @deprecated 业绩预测已改为必选，此参数将被忽略 */
+    includeForecast?: boolean;
+    includeComic?: boolean;
   };
   /** Phase 0: Agent 独立模型配置 - 允许用户为每个 Agent 指定不同的模型偏好 */
   agentModelConfig?: AgentModelConfig;
