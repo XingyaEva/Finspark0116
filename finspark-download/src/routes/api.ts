@@ -2049,4 +2049,212 @@ api.get('/images/comic/:reportId/:panelIndex', async (c) => {
   }
 });
 
+// ============ 港股数据同步 API ============
+// 用于服务端自动同步港股数据到D1数据库
+api.post('/admin/sync-hk-stocks', async (c) => {
+  try {
+    // 简单的 API Key 验证（可选）
+    const apiKey = c.req.header('X-Admin-Key');
+    const expectedKey = c.env.ADMIN_API_KEY || 'finspark-hk-sync-2026';
+    
+    if (apiKey && apiKey !== expectedKey) {
+      return c.json({ success: false, error: '无效的 API Key' }, 401);
+    }
+    
+    if (!c.env.DB) {
+      return c.json({ success: false, error: 'D1 数据库未配置' }, 503);
+    }
+    
+    const akshareProxyUrl = c.env.AKSHARE_PROXY_URL || 'http://47.110.92.210:8000';
+    
+    // 1. 从 AKShare 代理获取港股通成分股列表
+    console.log('[HK Sync] 从 AKShare 代理获取港股列表...');
+    const response = await fetch(`${akshareProxyUrl}/hk/stock_connect_list`);
+    
+    if (!response.ok) {
+      return c.json({ success: false, error: `获取港股列表失败: ${response.status}` }, 500);
+    }
+    
+    const result = await response.json() as { success: boolean; data?: Array<{code: string; name: string}>; count?: number; error?: string };
+    
+    if (!result.success || !result.data) {
+      return c.json({ success: false, error: result.error || '无法获取港股数据' }, 500);
+    }
+    
+    const hkStocks = result.data;
+    console.log(`[HK Sync] 获取到 ${hkStocks.length} 只港股`);
+    
+    // 2. 港股热门列表
+    const hotStocksHK = new Set([
+      '00700', '09988', '03690', '09618', '01024', '02318', '00941', '01810', '09999', '02020',
+      '00005', '00388', '00001', '00016', '00883', '00939', '01299', '00027', '02628', '03988',
+      '00669', '09888', '00981', '02382', '01211', '00175', '02269', '01177', '00288', '01928',
+      '09961', '01898', '02899', '06098', '09626', '01378', '02015', '06618', '03968', '06060',
+    ]);
+    
+    // 3. 基础拼音映射表
+    const pinyinMap: Record<string, string> = {
+      '腾': 'teng', '讯': 'xun', '阿': 'a', '里': 'li', '巴': 'ba', '美': 'mei', '团': 'tuan',
+      '京': 'jing', '东': 'dong', '小': 'xiao', '米': 'mi', '百': 'bai', '度': 'du', '网': 'wang', '易': 'yi',
+      '中': 'zhong', '国': 'guo', '平': 'ping', '安': 'an', '银': 'yin', '行': 'hang',
+      '建': 'jian', '工': 'gong', '农': 'nong', '商': 'shang', '招': 'zhao', '信': 'xin',
+      '保': 'bao', '险': 'xian', '人': 'ren', '寿': 'shou', '太': 'tai', '洋': 'yang',
+      '华': 'hua', '夏': 'xia', '新': 'xin', '天': 'tian', '地': 'di', '产': 'chan',
+      '海': 'hai', '科': 'ke', '技': 'ji', '电': 'dian', '子': 'zi', '通': 'tong',
+      '医': 'yi', '药': 'yao', '汽': 'qi', '车': 'che', '能': 'neng', '源': 'yuan',
+      '金': 'jin', '融': 'rong', '投': 'tou', '资': 'zi', '控': 'kong', '股': 'gu',
+      '集': 'ji', '发': 'fa', '展': 'zhan', '业': 'ye', '物': 'wu', '流': 'liu',
+      '联': 'lian', '想': 'xiang', '比': 'bi', '亚': 'ya', '迪': 'di', '宁': 'ning',
+    };
+    
+    function toPinyin(name: string): { pinyin: string; abbr: string } {
+      let pinyin = '';
+      let abbr = '';
+      for (const char of name) {
+        const py = pinyinMap[char];
+        if (py) {
+          pinyin += py;
+          abbr += py[0];
+        } else if (/[a-zA-Z0-9]/.test(char)) {
+          pinyin += char.toLowerCase();
+          abbr += char.toLowerCase();
+        }
+      }
+      return { pinyin: pinyin || name, abbr: abbr || name };
+    }
+    
+    // 4. 批量插入港股数据
+    let insertedCount = 0;
+    let errorCount = 0;
+    
+    // 先删除现有港股数据（全量更新）
+    await c.env.DB.prepare("DELETE FROM stocks WHERE stock_type = 'HK'").run();
+    console.log('[HK Sync] 已清空现有港股数据');
+    
+    // 分批插入
+    const batchSize = 50;
+    for (let i = 0; i < hkStocks.length; i += batchSize) {
+      const batch = hkStocks.slice(i, i + batchSize);
+      
+      const statements = batch.map(stock => {
+        const symbol = stock.code.padStart(5, '0');
+        const { pinyin, abbr } = toPinyin(stock.name);
+        const isHot = hotStocksHK.has(symbol) ? 1 : 0;
+        
+        return c.env.DB.prepare(`
+          INSERT OR REPLACE INTO stocks 
+          (ts_code, symbol, name, area, industry, market, exchange, list_status, stock_type, pinyin, pinyin_abbr, is_hot, hk_stock_connect)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          `${symbol}.HK`,
+          symbol,
+          stock.name,
+          '香港',
+          '港股',
+          '港股主板',
+          'HKEX',
+          'L',
+          'HK',
+          pinyin,
+          abbr,
+          isHot,
+          1
+        );
+      });
+      
+      try {
+        await c.env.DB.batch(statements);
+        insertedCount += batch.length;
+        console.log(`[HK Sync] 批次 ${Math.floor(i / batchSize) + 1}: 插入 ${batch.length} 条`);
+      } catch (error) {
+        errorCount += batch.length;
+        console.error(`[HK Sync] 批次 ${Math.floor(i / batchSize) + 1} 失败:`, error);
+      }
+    }
+    
+    // 5. 重建 FTS 索引
+    console.log('[HK Sync] 重建 FTS 索引...');
+    try {
+      await c.env.DB.prepare('DELETE FROM stocks_fts').run();
+      await c.env.DB.prepare(`
+        INSERT INTO stocks_fts(rowid, name, symbol, ts_code, industry, pinyin, pinyin_abbr)
+        SELECT id, name, symbol, ts_code, industry, COALESCE(pinyin, ''), COALESCE(pinyin_abbr, '')
+        FROM stocks WHERE list_status = 'L'
+      `).run();
+      console.log('[HK Sync] FTS 索引重建完成');
+    } catch (ftsError) {
+      console.error('[HK Sync] FTS 索引重建失败:', ftsError);
+    }
+    
+    // 6. 获取最终统计
+    const stats = await c.env.DB.prepare(`
+      SELECT 
+        COUNT(*) as total,
+        SUM(CASE WHEN stock_type = 'HK' THEN 1 ELSE 0 END) as hk_count,
+        SUM(CASE WHEN stock_type != 'HK' THEN 1 ELSE 0 END) as a_count
+      FROM stocks
+    `).first<{ total: number; hk_count: number; a_count: number }>();
+    
+    return c.json({
+      success: true,
+      message: '港股数据同步完成',
+      syncResult: {
+        inserted: insertedCount,
+        errors: errorCount,
+        source: 'AKShare 代理',
+        proxyUrl: akshareProxyUrl,
+      },
+      databaseStats: {
+        total: stats?.total || 0,
+        hkStocks: stats?.hk_count || 0,
+        aStocks: stats?.a_count || 0,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('[HK Sync] 同步失败:', error);
+    return c.json({ 
+      success: false, 
+      error: '港股数据同步失败',
+      details: error instanceof Error ? error.message : '未知错误'
+    }, 500);
+  }
+});
+
+// 获取数据库统计信息
+api.get('/admin/db-stats', async (c) => {
+  if (!c.env.DB) {
+    return c.json({ success: false, error: 'D1 数据库未配置' }, 503);
+  }
+  
+  try {
+    const stats = await c.env.DB.prepare(`
+      SELECT 
+        COUNT(*) as total,
+        SUM(CASE WHEN stock_type = 'HK' THEN 1 ELSE 0 END) as hk_count,
+        SUM(CASE WHEN stock_type != 'HK' OR stock_type IS NULL THEN 1 ELSE 0 END) as a_count,
+        SUM(CASE WHEN is_hot = 1 THEN 1 ELSE 0 END) as hot_count
+      FROM stocks WHERE list_status = 'L'
+    `).first<{ total: number; hk_count: number; a_count: number; hot_count: number }>();
+    
+    const ftsCount = await c.env.DB.prepare('SELECT COUNT(*) as count FROM stocks_fts')
+      .first<{ count: number }>();
+    
+    return c.json({
+      success: true,
+      stats: {
+        total: stats?.total || 0,
+        hkStocks: stats?.hk_count || 0,
+        aStocks: stats?.a_count || 0,
+        hotStocks: stats?.hot_count || 0,
+        ftsIndexed: ftsCount?.count || 0,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('[DB Stats] Error:', error);
+    return c.json({ success: false, error: '获取统计失败' }, 500);
+  }
+});
+
 export default api;

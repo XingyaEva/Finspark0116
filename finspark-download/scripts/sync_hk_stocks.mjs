@@ -431,7 +431,7 @@ function executeSQL(sql, options = {}) {
     return;
   }
   
-  const envFlag = prod ? '' : '--local';
+  const envFlag = prod ? '--remote' : '--local';
   log(`执行 SQL 导入 (${prod ? '生产环境' : '本地环境'})...`);
   
   const lines = sql.split('\n').filter(line => 
